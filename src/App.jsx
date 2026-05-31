@@ -191,43 +191,33 @@ select.form-input{-webkit-appearance:none;appearance:none;cursor:pointer}
 .resend-link{color:var(--gold);font-weight:600;cursor:pointer;background:none;border:none;font-family:'DM Sans',sans-serif;font-size:12px}
 `;
 
-// ── Login Screen ───────────────────────────────────────────────
+// ── PIN Login (Temporary — until OTP is enabled) ──────────────
+// PIN credentials:
+//   Admin:   username = admin    PIN = 2024
+//   Staff:   username = staff    PIN = 1234
+const TEMP_USERS = {
+  admin: { pin: "2024", role: "admin",  name: "Committee Admin",  flat_id: null },
+  staff: { pin: "1234", role: "staff",  name: "Staff User",       flat_id: null },
+};
+
 function LoginScreen({ onLogin }) {
-  const [step, setStep]       = useState("phone"); // phone | otp
-  const [phone, setPhone]     = useState("");
-  const [otp, setOtp]         = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
-  const [countdown, setCount] = useState(0);
+  const [username, setUsername] = useState("");
+  const [pin,      setPin]      = useState("");
+  const [error,    setError]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [showPin,  setShowPin]  = useState(false);
 
-  useEffect(() => {
-    if (countdown > 0) {
-      const t = setTimeout(() => setCount(c => c - 1), 1000);
-      return () => clearTimeout(t);
-    }
-  }, [countdown]);
-
-  async function sendOtp() {
-    if (phone.length < 10) { setError("Enter a valid 10-digit mobile number"); return; }
-    setLoading(true); setError("");
-    const fullPhone = "+91" + phone.replace(/\D/g, "");
-    const { error: err } = await supabase.auth.signInWithOtp({ phone: fullPhone });
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    setStep("otp");
-    setCount(30);
-  }
-
-  async function verifyOtp() {
-    if (otp.length < 6) { setError("Enter the 6-digit OTP"); return; }
-    setLoading(true); setError("");
-    const fullPhone = "+91" + phone.replace(/\D/g, "");
-    const { data, error: err } = await supabase.auth.verifyOtp({
-      phone: fullPhone, token: otp, type: "sms"
-    });
-    setLoading(false);
-    if (err) { setError("Invalid OTP. Please try again."); return; }
-    onLogin(data.session);
+  function handleLogin() {
+    setError("");
+    const u = username.trim().toLowerCase();
+    const user = TEMP_USERS[u];
+    if (!user) { setError("Username not found"); return; }
+    if (pin !== user.pin) { setError("Incorrect PIN. Please try again."); return; }
+    setLoading(true);
+    // Simulate brief loading then pass a mock session
+    setTimeout(() => {
+      onLogin({ user: { id: "temp-" + u }, temp: true, profile: { ...user, id: "temp-" + u } });
+    }, 600);
   }
 
   return (
@@ -236,57 +226,61 @@ function LoginScreen({ onLogin }) {
       <div className="login-title">Antony Pallazo</div>
       <div className="login-sub">Apartment Management</div>
       <div className="login-card">
-        {step === "phone" ? (
-          <>
-            <div className="login-step-title">Welcome back</div>
-            <div className="login-step-sub">Enter your registered mobile number to receive a one-time password</div>
-            <div className="form-group">
-              <label className="form-label">Mobile Number</label>
-              <div className="phone-input-row">
-                <div className="phone-prefix">🇮🇳 +91</div>
-                <input
-                  className="phone-field"
-                  type="tel" maxLength={10} placeholder="98XXXXXXXX"
-                  value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g,"")); setError(""); }}
-                  onKeyDown={e => e.key === "Enter" && sendOtp()}
-                />
-              </div>
-            </div>
-            {error && <div style={{color:"var(--red)",fontSize:12,marginBottom:12}}>{error}</div>}
-            <button className="btn btn-primary" onClick={sendOtp} disabled={loading}>
-              {loading ? <span className="spinner"/> : "Send OTP →"}
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="login-step-title">Enter OTP</div>
-            <div className="login-step-sub">A 6-digit code was sent to +91 {phone}</div>
-            <div className="form-group">
-              <label className="form-label">One-Time Password</label>
-              <input
-                className="otp-input" type="tel" maxLength={6} placeholder="······"
-                value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g,"")); setError(""); }}
-                onKeyDown={e => e.key === "Enter" && verifyOtp()}
-              />
-            </div>
-            {error && <div style={{color:"var(--red)",fontSize:12,marginBottom:12}}>{error}</div>}
-            <button className="btn btn-success" onClick={verifyOtp} disabled={loading}>
-              {loading ? <span className="spinner"/> : "✓ Verify & Login"}
-            </button>
-            <div className="resend-row">
-              {countdown > 0
-                ? `Resend OTP in ${countdown}s`
-                : <><button className="resend-link" onClick={() => { setStep("phone"); setOtp(""); }}>← Change number</button> &nbsp;·&nbsp; <button className="resend-link" onClick={sendOtp}>Resend OTP</button></>
-              }
-            </div>
-            <button className="btn btn-secondary mt10" onClick={() => { setStep("phone"); setOtp(""); setError(""); }}>
-              ← Back
-            </button>
-          </>
+        <div className="login-step-title">Welcome back</div>
+        <div className="login-step-sub" style={{marginBottom:20}}>
+          Enter your username and PIN to continue
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Username</label>
+          <input
+            className="form-input"
+            type="text" placeholder="e.g. admin"
+            value={username}
+            onChange={e => { setUsername(e.target.value); setError(""); }}
+            onKeyDown={e => e.key === "Enter" && handleLogin()}
+            autoCapitalize="none"
+          />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">PIN</label>
+          <div style={{position:"relative"}}>
+            <input
+              className="form-input"
+              type={showPin ? "text" : "password"}
+              placeholder="Enter 4-digit PIN"
+              maxLength={6}
+              value={pin}
+              onChange={e => { setPin(e.target.value.replace(/\D/g,"")); setError(""); }}
+              onKeyDown={e => e.key === "Enter" && handleLogin()}
+              style={{paddingRight:44}}
+            />
+            <button
+              onClick={() => setShowPin(p => !p)}
+              style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:16,color:"var(--muted)"}}
+            >{showPin ? "🙈" : "👁"}</button>
+          </div>
+        </div>
+
+        {error && (
+          <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12,fontWeight:500}}>
+            ⚠️ {error}
+          </div>
         )}
+
+        <button className="btn btn-primary" onClick={handleLogin} disabled={loading}>
+          {loading ? <span className="spinner"/> : "🔓 Login"}
+        </button>
+
+        <div style={{marginTop:20,padding:"12px 14px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)",lineHeight:1.7}}>
+          <div style={{fontWeight:700,color:"var(--text)",marginBottom:4}}>Default credentials:</div>
+          <div>👤 Admin &nbsp;→&nbsp; username: <b>admin</b> &nbsp;·&nbsp; PIN: <b>2024</b></div>
+          <div>👤 Staff &nbsp;&nbsp;→&nbsp; username: <b>staff</b> &nbsp;·&nbsp; PIN: <b>1234</b></div>
+        </div>
       </div>
-      <div style={{color:"rgba(255,255,255,.25)",fontSize:11,marginTop:24,textAlign:"center"}}>
-        Secured by Supabase · Data stored in PostgreSQL
+      <div style={{color:"rgba(255,255,255,.25)",fontSize:11,marginTop:20,textAlign:"center"}}>
+        ⚠️ Temporary PIN login · OTP will be enabled soon
       </div>
     </div>
   );
@@ -312,6 +306,18 @@ export default function App() {
 
   // ── Auth state listener
   useEffect(() => {
+    // Check for saved temp session in localStorage
+    const saved = localStorage.getItem("pallazo_temp_session");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setSession(parsed);
+        setUserProfile(parsed.profile);
+        setLoading(false);
+        return;
+      } catch(e) { localStorage.removeItem("pallazo_temp_session"); }
+    }
+    // Try real Supabase session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) loadUserProfile(session.user.id);
@@ -353,7 +359,10 @@ export default function App() {
   }
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    localStorage.removeItem("pallazo_temp_session");
+    if (session && !session.temp) await supabase.auth.signOut();
+    setSession(null);
+    setUserProfile(null);
     showToast("Logged out successfully");
   }
 
@@ -462,7 +471,15 @@ export default function App() {
   if (!session) return (
     <>
       <style>{CSS}</style>
-      <LoginScreen onLogin={s => { setSession(s); loadUserProfile(s.user.id); }} />
+      <LoginScreen onLogin={s => {
+        if (s.temp) {
+          localStorage.setItem("pallazo_temp_session", JSON.stringify(s));
+          setUserProfile(s.profile);
+        } else {
+          loadUserProfile(s.user.id);
+        }
+        setSession(s);
+      }} />
     </>
   );
 
