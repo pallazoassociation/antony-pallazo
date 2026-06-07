@@ -279,6 +279,7 @@ export default function App() {
   const [otherIncome,   setOtherIncome]   = useState([]);
   const [corpusData,    setCorpusData]    = useState([]);
   const [fdData,        setFdData]        = useState([]);
+  const [acctSettings,  setAcctSettings]  = useState({});
   const [selectedMonth, setSelectedMonth] = useState("2026-05");
   const [selectedFlat,  setSelectedFlat]  = useState(null);
   const [filter,        setFilter]        = useState("all");
@@ -315,7 +316,7 @@ export default function App() {
   }
 
   const loadData = useCallback(async () => {
-    const [{ data:f },{ data:b },{ data:p },{ data:e },{ data:n },{ data:oi },{ data:cp },{ data:fd }] = await Promise.all([
+    const [{ data:f },{ data:b },{ data:p },{ data:e },{ data:n },{ data:oi },{ data:cp },{ data:fd },{ data:as }] = await Promise.all([
       supabase.from("flats").select("*").order("block").order("flat_no"),
       supabase.from("bills").select("*"),
       supabase.from("payments").select("*"),
@@ -324,6 +325,7 @@ export default function App() {
       supabase.from("other_income").select("*").order("received_date",{ascending:false}),
       supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
       supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
+      supabase.from("account_settings").select("*"),
     ]);
     if(f) setFlats(f);
     if(b) setAllBills(b);
@@ -333,6 +335,11 @@ export default function App() {
     if(oi) setOtherIncome(oi);
     if(cp) setCorpusData(cp);
     if(fd) setFdData(fd);
+    if(as) {
+      const settings = {};
+      as.forEach(row => { settings[row.key] = row.value; });
+      setAcctSettings(settings);
+    }
   }, []);
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
@@ -433,7 +440,7 @@ export default function App() {
     collected, totalDues, expected, paidCnt, overdCnt,
     monthlyExp, totalExp, collPct,
     overdueByFlat, totalOverdueAmount,
-    otherIncome, corpusData, fdData
+    otherIncome, corpusData, fdData, acctSettings
   };
 
   return (
@@ -533,29 +540,75 @@ function MonthSelector({selectedMonth, setSelectedMonth}) {
 }
 
 // ── Home Tab ──────────────────────────────────────────────────
-function HomeTab({flats,selectedMonth,setSelectedMonth,collected,totalDues,expected,paidCnt,overdCnt,monthlyExp,collPct,monthBills,overdueByFlat,totalOverdueAmount,setSelectedFlat,setTab,showToast,loadData}) {
+function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,
+  selectedMonth,setSelectedMonth,collected,totalDues,expected,paidCnt,overdCnt,
+  monthlyExp,monthBills,overdueByFlat,totalOverdueAmount,setSelectedFlat,setTab,showToast}) {
   const activeFlats = flats.filter(f=>f.status!=="vacant").length;
   const partCnt = monthBills.filter(b=>b.status==="partial").length;
+
+  // ── Complete bank balance calculation ───────────────────────
+  const openingBal  = otherIncome.find(x=>x.source==="Opening Bank Balance")?.amount || 105520.31;
+  const totalMaint  = allPayments.reduce((s,p)=>s+(p.amount_paid||0),0);
+  const totalOther  = otherIncome.filter(x=>x.source!=="Opening Bank Balance").reduce((s,x)=>s+(x.amount||0),0);
+  const totalCorpus = corpusData.reduce((s,c)=>s+(c.amount||0),0);
+  const fdMatured   = fdData.filter(f=>f.status==="matured").reduce((s,f)=>s+(f.matured_amount||0),0);
+  const fdActive    = fdData.filter(f=>f.status==="active").reduce((s,f)=>s+(f.invested_amount||0),0);
+  const totalIncome = openingBal + totalMaint + totalOther + totalCorpus + fdMatured;
+  const totalExp    = allExpenses.reduce((s,e)=>s+(e.amount||0),0);
+  const bankBalance = totalIncome - totalExp;
+
   return (
     <>
+      {/* Hero */}
       <div className="hero">
         <div className="hero-greeting">Committee Admin</div>
         <div className="hero-name">Antony Pallazo</div>
         <div className="hero-month">{monthLabel(selectedMonth)} · 30 Flats · {activeFlats} Active</div>
         <div className="hero-divider"/>
         <div className="hero-stats">
-          <div><div className="hs-val">{fmt(collected)}</div><div className="hs-label">Collected</div></div>
-          <div><div className="hs-val orange">{fmt(totalDues)}</div><div className="hs-label">Month Dues</div></div>
-          <div><div className="hs-val" style={{color:"#E05B4E"}}>{fmt(totalOverdueAmount)}</div><div className="hs-label">All-time Dues</div></div>
+          <div><div className="hs-val">{fmt(collected)}</div><div className="hs-label">Month Collected</div></div>
+          <div><div className="hs-val orange">{fmt(totalOverdueAmount)}</div><div className="hs-label">Total Dues</div></div>
+          <div><div className="hs-val" style={{color:"#7DCEA0"}}>{fmt(bankBalance)}</div><div className="hs-label">Bank Balance</div></div>
+        </div>
+      </div>
+
+      {/* Bank Balance Card */}
+      <div style={{padding:"0 16px 12px"}}>
+        <div className="card">
+          <div style={{padding:"14px 16px",background:"linear-gradient(135deg,#1A3A2A,#0F2B1E)",borderRadius:"var(--r)"}}>
+            <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}}>
+              Estimated Bank Balance (All-Time)
+            </div>
+            <div style={{color:"#7DCEA0",fontSize:28,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>
+              {fmt(bankBalance)}
+            </div>
+            <div style={{height:"1px",background:"rgba(255,255,255,.1)",margin:"12px 0"}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              {[
+                ["Total Income",  fmt(totalIncome),  "#7DCEA0"],
+                ["Total Expenses",fmt(totalExp),     "#E08080"],
+                ["FD Asset",      fmt(fdActive),     "#D4A853"],
+              ].map(([l,v,c])=>(
+                <div key={l}>
+                  <div style={{color:"rgba(255,255,255,.4)",fontSize:9,letterSpacing:".5px",marginBottom:3}}>{l}</div>
+                  <div style={{color:c,fontSize:13,fontWeight:700}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:10,fontSize:10,color:"rgba(255,255,255,.3)"}}>
+              Opening ₹1,05,520 + Maint ₹{Math.round(totalMaint/100000*10)/10}L + Other ₹{Math.round((totalOther+totalCorpus+fdMatured)/1000)}K − Expenses ₹{Math.round(totalExp/100000*10)/10}L
+            </div>
+          </div>
         </div>
       </div>
 
       <MonthSelector selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth}/>
 
+      {/* Monthly collection bar */}
       <div style={{padding:"0 16px 12px"}}>
         <div className="card">
           <div style={{padding:"13px 16px 11px"}}>
-            <div className="coll-row" style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--muted)",marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--muted)",marginBottom:8}}>
               <span>{monthLabel(selectedMonth)} Collection</span>
               <b style={{color:"var(--text)"}}>{fmt(collected)} / {fmt(expected)}</b>
             </div>
@@ -574,10 +627,10 @@ function HomeTab({flats,selectedMonth,setSelectedMonth,collected,totalDues,expec
       </div>
 
       <div className="stat-grid">
-        <div className="stat-card green"><div className="sc-label">Collected</div><div className="sc-value">{fmt(collected)}</div><div className="sc-sub">{paidCnt} flats paid</div></div>
-        <div className="stat-card red"><div className="sc-label">Month Dues</div><div className="sc-value">{fmt(totalDues)}</div><div className="sc-sub">{overdCnt} overdue flats</div></div>
-        <div className="stat-card gold"><div className="sc-label">Expected</div><div className="sc-value">{fmt(expected)}</div><div className="sc-sub">{activeFlats} active flats</div></div>
-        <div className="stat-card"><div className="sc-label">Expenses</div><div className="sc-value">{fmt(monthlyExp)}</div><div className="sc-sub">{monthLabel(selectedMonth)}</div></div>
+        <div className="stat-card green"><div className="sc-label">Month Collected</div><div className="sc-value">{fmt(collected)}</div><div className="sc-sub">{paidCnt} flats paid</div></div>
+        <div className="stat-card red"><div className="sc-label">Total Dues</div><div className="sc-value">{fmt(totalOverdueAmount)}</div><div className="sc-sub">11 flats · 22 months</div></div>
+        <div className="stat-card gold"><div className="sc-label">Month Expected</div><div className="sc-value">{fmt(expected)}</div><div className="sc-sub">{activeFlats} active flats</div></div>
+        <div className="stat-card"><div className="sc-label">Month Expenses</div><div className="sc-value">{fmt(monthlyExp)}</div><div className="sc-sub">{monthLabel(selectedMonth)}</div></div>
       </div>
 
       {/* Quick actions */}
@@ -586,7 +639,7 @@ function HomeTab({flats,selectedMonth,setSelectedMonth,collected,totalDues,expec
         {[
           {icon:"🏢",label:"All Flats",  action:()=>setTab("flats")},
           {icon:"🚨",label:"Overdue",    action:()=>setTab("overdue")},
-          {icon:"📊",label:"Reports",    action:()=>setTab("reports")},
+          {icon:"💰",label:"Income",     action:()=>setTab("income")},
           {icon:"📤",label:"Reminders",  action:()=>showToast("📤 Reminders sent to "+overdCnt+" defaulters")},
         ].map(q=>(
           <button key={q.label} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer",background:"none",border:"none"}} onClick={q.action}>
