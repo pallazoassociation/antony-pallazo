@@ -176,6 +176,31 @@ select.form-input{-webkit-appearance:none;appearance:none;cursor:pointer}
 .overdue-month-row{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:var(--bg);border-radius:8px;margin-bottom:6px;font-size:12px}
 .overdue-month-row:last-child{margin-bottom:0}
 .loading-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1A1410,#2C2018);flex-direction:column;gap:12px}
+.income-tabs{display:flex;gap:0;padding:12px 16px 0;border-bottom:1px solid var(--border);background:var(--card);margin-bottom:2px}
+.income-tab{flex:1;padding:10px 4px;font-size:12px;font-weight:600;color:var(--muted);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;font-family:'DM Sans',sans-serif}
+.income-tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+.summary-banner{margin:12px 16px 0;border-radius:14px;padding:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.sb-item .sb-val{font-size:17px;font-weight:700;color:#FFF}
+.sb-item .sb-lbl{font-size:10px;color:rgba(255,255,255,.5);margin-top:2px}
+.income-item{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)}
+.income-item:last-child{border-bottom:none}
+.income-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.income-info{flex:1;padding:0 11px}
+.income-src{font-size:13px;font-weight:600;line-height:1.3}
+.income-date{font-size:11px;color:var(--muted);margin-top:2px}
+.income-amt{font-size:14px;font-weight:700;color:var(--green);text-align:right}
+.fd-card{margin:10px 16px 0;border-radius:14px;border:1.5px solid var(--border);overflow:hidden}
+.fd-header{background:linear-gradient(135deg,#1A1410,#2C2018);padding:14px 16px}
+.fd-acc{color:rgba(255,255,255,.5);font-size:10px;letter-spacing:1px;text-transform:uppercase}
+.fd-amt{color:#FFF;font-size:22px;font-weight:700;font-family:'Playfair Display',serif;margin-top:3px}
+.fd-status{display:inline-block;padding:2px 10px;border-radius:99px;font-size:10px;font-weight:700;margin-top:6px}
+.fd-active{background:rgba(45,122,79,.3);color:#7DCEA0}
+.fd-matured{background:rgba(184,134,11,.3);color:#D4A853}
+.corpus-item{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border)}
+.corpus-item:last-child{border-bottom:none}
+.corpus-flat{font-size:13px;font-weight:600}
+.corpus-date{font-size:11px;color:var(--muted)}
+.corpus-amt{font-size:14px;font-weight:700;color:var(--gold)}
 `;
 
 // ── PIN Login ─────────────────────────────────────────────────
@@ -251,6 +276,9 @@ export default function App() {
   const [allPayments,   setAllPayments]   = useState([]);
   const [allExpenses,   setAllExpenses]   = useState([]);
   const [notices,       setNotices]       = useState([]);
+  const [otherIncome,   setOtherIncome]   = useState([]);
+  const [corpusData,    setCorpusData]    = useState([]);
+  const [fdData,        setFdData]        = useState([]);
   const [selectedMonth, setSelectedMonth] = useState("2026-05");
   const [selectedFlat,  setSelectedFlat]  = useState(null);
   const [filter,        setFilter]        = useState("all");
@@ -287,18 +315,24 @@ export default function App() {
   }
 
   const loadData = useCallback(async () => {
-    const [{ data:f },{ data:b },{ data:p },{ data:e },{ data:n }] = await Promise.all([
+    const [{ data:f },{ data:b },{ data:p },{ data:e },{ data:n },{ data:oi },{ data:cp },{ data:fd }] = await Promise.all([
       supabase.from("flats").select("*").order("block").order("flat_no"),
       supabase.from("bills").select("*"),
       supabase.from("payments").select("*"),
       supabase.from("expenses").select("*").order("expense_date",{ascending:false}),
       supabase.from("notices").select("*").order("posted_at",{ascending:false}),
+      supabase.from("other_income").select("*").order("received_date",{ascending:false}),
+      supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
+      supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
     ]);
     if(f) setFlats(f);
     if(b) setAllBills(b);
     if(p) setAllPayments(p);
     if(e) setAllExpenses(e);
     if(n) setNotices(n);
+    if(oi) setOtherIncome(oi);
+    if(cp) setCorpusData(cp);
+    if(fd) setFdData(fd);
   }, []);
 
   useEffect(()=>{ if(session) loadData(); },[session,loadData]);
@@ -398,7 +432,8 @@ export default function App() {
     flatBill, flatStatus, monthBills, monthExpenses,
     collected, totalDues, expected, paidCnt, overdCnt,
     monthlyExp, totalExp, collPct,
-    overdueByFlat, totalOverdueAmount
+    overdueByFlat, totalOverdueAmount,
+    otherIncome, corpusData, fdData
   };
 
   return (
@@ -423,7 +458,7 @@ export default function App() {
           {tab==="home"     && <HomeTab     {...sharedProps} setSelectedFlat={setSelectedFlat}/>}
           {tab==="flats"    && <FlatsTab    {...sharedProps} filteredFlats={filteredFlats} filter={filter} setFilter={setFilter} search={search} setSearch={setSearch} setSelectedFlat={setSelectedFlat}/>}
           {tab==="overdue"  && <OverdueTab  {...sharedProps} setSelectedFlat={setSelectedFlat}/>}
-          {tab==="reports"  && <ReportsTab  {...sharedProps}/>}
+          {tab==="income"   && <IncomeTab   {...sharedProps}/>}
           {tab==="expenses" && <ExpensesTab {...sharedProps}/>}
         </div>
 
@@ -432,7 +467,7 @@ export default function App() {
             {id:"home",    icon:"🏠",label:"Home"},
             {id:"flats",   icon:"🏢",label:"Flats"},
             {id:"overdue", icon:"🚨",label:"Overdue"},
-            {id:"reports", icon:"📊",label:"Reports"},
+            {id:"income",  icon:"💰",label:"Income"},
             {id:"expenses",icon:"💳",label:"Expenses"},
           ].map(t=>(
             <button key={t.id} className={`tab-item${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>
@@ -900,6 +935,189 @@ function ExpensesTab({selectedMonth,setSelectedMonth,allExpenses,monthExpenses,t
           ))}
         </div>
       </div>
+    </>
+  );
+}
+
+// ── Income Tab — Maintenance + Other Sources + Corpus + FD ───
+function IncomeTab({allPayments, otherIncome, corpusData, fdData, showToast}) {
+  const [activeSection, setActiveSection] = useState("other");
+
+  // Totals
+  const totalMaintenance = allPayments.reduce((s,p)=>s+(p.amount_paid||0),0);
+  const totalOther       = otherIncome.filter(x=>x.source!=="Opening Bank Balance").reduce((s,x)=>s+(x.amount||0),0);
+  const totalCorpus      = corpusData.reduce((s,c)=>s+(c.amount||0),0);
+  const totalFdInvested  = fdData.reduce((s,f)=>s+(f.invested_amount||0),0);
+  const totalFdMatured   = fdData.filter(f=>f.status==="matured").reduce((s,f)=>s+(f.matured_amount||0),0);
+  const openingBalance   = otherIncome.find(x=>x.source==="Opening Bank Balance");
+
+  const SECTIONS = [
+    {id:"other",  label:"Other Income"},
+    {id:"corpus", label:"Corpus Fund"},
+    {id:"fd",     label:"Fixed Deposits"},
+  ];
+
+  return (
+    <>
+      {/* Summary banner */}
+      <div style={{background:"linear-gradient(135deg,#1A1410,#2C2018)",margin:"14px 16px 0",borderRadius:16,padding:"16px 18px"}}>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:12}}>All-Time Income Summary</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          {[
+            ["Maintenance",fmt(totalMaintenance),"1,418 payments"],
+            ["Other Income",fmt(totalOther),"Interest, rent & refunds"],
+            ["Corpus Fund",fmt(totalCorpus),"30 flats · one-time"],
+            ["FD Matured",fmt(totalFdMatured),"₹"+totalFdInvested.toLocaleString("en-IN")+" invested"],
+          ].map(([l,v,s])=>(
+            <div key={l}>
+              <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:".5px",marginBottom:3}}>{l}</div>
+              <div style={{color:"#FFF",fontSize:17,fontWeight:700}}>{v}</div>
+              <div style={{color:"rgba(255,255,255,.4)",fontSize:10,marginTop:1}}>{s}</div>
+            </div>
+          ))}
+        </div>
+        {openingBalance && (
+          <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid rgba(255,255,255,.1)",color:"rgba(255,255,255,.5)",fontSize:11}}>
+            Opening Bank Balance (May 2022): <span style={{color:"#D4A853",fontWeight:600}}>{fmt(openingBalance.amount)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Section tabs */}
+      <div className="income-tabs">
+        {SECTIONS.map(s=>(
+          <button key={s.id} className={`income-tab${activeSection===s.id?" active":""}`} onClick={()=>setActiveSection(s.id)}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Other Income */}
+      {activeSection==="other" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div style={{fontSize:11,color:"var(--muted)",marginBottom:10,padding:"0 2px"}}>
+            {otherIncome.filter(x=>x.source!=="Opening Bank Balance").length} records · Total {fmt(totalOther)}
+          </div>
+          <div className="card">
+            {otherIncome.filter(x=>x.source!=="Opening Bank Balance").map((item,i)=>{
+              const isInterest = item.source?.toLowerCase().includes("interest");
+              const isFd       = item.source?.toLowerCase().includes("fd") || item.source?.toLowerCase().includes("fixed deposit");
+              const isRefund   = item.source?.toLowerCase().includes("refund");
+              const isRent     = item.source?.toLowerCase().includes("rent") || item.source?.toLowerCase().includes("room");
+              const icon = isFd?"🏦":isInterest?"📈":isRefund?"↩️":isRent?"🏠":"💵";
+              const bg   = isFd?"#1A3A2A":isInterest?"#1A2A3A":isRefund?"#2A1A1A":"#1A1A2A";
+              return (
+                <div key={item.id||i} className="income-item">
+                  <div className="income-icon" style={{background:bg}}>{icon}</div>
+                  <div className="income-info">
+                    <div className="income-src">{item.source}</div>
+                    <div className="income-date">{item.received_date || "Date not available"}</div>
+                  </div>
+                  <div className="income-amt">{fmt(item.amount)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Corpus */}
+      {activeSection==="corpus" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div style={{background:"linear-gradient(135deg,#B8860B,#D4A853)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+            <div style={{color:"rgba(255,255,255,.7)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase"}}>Total Corpus Fund Collected</div>
+            <div style={{color:"#FFF",fontSize:26,fontWeight:700,fontFamily:"'Playfair Display',serif",marginTop:4}}>{fmt(totalCorpus)}</div>
+            <div style={{color:"rgba(255,255,255,.7)",fontSize:12,marginTop:4}}>{corpusData.length} of 30 flats paid · ₹5,000 per flat</div>
+          </div>
+          <div className="card">
+            {corpusData.map((c,i)=>(
+              <div key={c.id||i} className="corpus-item">
+                <div>
+                  <div className="corpus-flat">Flat {c.flat_id}</div>
+                  <div className="corpus-date">{c.paid_date||"—"} · {c.mode}</div>
+                </div>
+                <div className="corpus-amt">{fmt(c.amount)}</div>
+              </div>
+            ))}
+            {/* Show unpaid flats */}
+            {(() => {
+              const paidFlats = new Set(corpusData.map(c=>c.flat_id));
+              const ALL = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
+              const unpaid = ALL.filter(f=>!paidFlats.has(f));
+              if(unpaid.length===0) return null;
+              return unpaid.map(f=>(
+                <div key={f} className="corpus-item" style={{opacity:.5}}>
+                  <div><div className="corpus-flat">Flat {f}</div><div className="corpus-date">Not yet paid</div></div>
+                  <div style={{fontSize:12,color:"var(--muted)"}}>Pending</div>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Fixed Deposits */}
+      {activeSection==="fd" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div style={{fontSize:11,color:"var(--muted)",marginBottom:10,padding:"0 2px"}}>
+            {fdData.length} Fixed Deposit{fdData.length!==1?"s":""} · Total Invested {fmt(totalFdInvested)}
+          </div>
+          {fdData.map((fd,i)=>(
+            <div key={fd.id||i} className="fd-card" style={{marginTop: i>0?12:0}}>
+              <div className="fd-header">
+                <div className="fd-acc">Account No: {fd.account_no}</div>
+                <div className="fd-amt">{fmt(fd.invested_amount)}</div>
+                <div className={`fd-status ${fd.status==="matured"?"fd-matured":"fd-active"}`}>
+                  {fd.status==="matured"?"✓ Matured":"⏳ Active"}
+                </div>
+              </div>
+              <div>
+                <div className="info-row">
+                  <span className="ir-label">Invested Amount</span>
+                  <span className="ir-value" style={{color:"var(--red)"}}>{fmt(fd.invested_amount)}</span>
+                </div>
+                <div className="info-row">
+                  <span className="ir-label">Invested Date</span>
+                  <span className="ir-value">{fd.invested_date}</span>
+                </div>
+                <div className="info-row">
+                  <span className="ir-label">Matured Amount</span>
+                  <span className="ir-value" style={{color:fd.matured_amount?"var(--green)":"var(--muted)"}}>
+                    {fd.matured_amount ? fmt(fd.matured_amount) : "Not yet matured"}
+                  </span>
+                </div>
+                <div className="info-row">
+                  <span className="ir-label">Maturity Date</span>
+                  <span className="ir-value">{fd.matured_date||"—"}</span>
+                </div>
+                {fd.matured_amount && (
+                  <div className="info-row">
+                    <span className="ir-label">Interest Earned</span>
+                    <span className="ir-value" style={{color:"var(--green)",fontWeight:700}}>
+                      {fmt(fd.matured_amount - fd.invested_amount)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          <div style={{marginTop:16,padding:"12px 14px",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:8,fontWeight:700,letterSpacing:".5px",textTransform:"uppercase"}}>FD Summary</div>
+            {[
+              ["Total Invested",    fmt(totalFdInvested),     "var(--red)"],
+              ["Total Matured",     fmt(totalFdMatured),      "var(--green)"],
+              ["Interest Earned",   fmt(totalFdMatured - totalFdInvested > 0 ? totalFdMatured - totalFdInvested : 0), "var(--gold)"],
+              ["Active FDs",        fdData.filter(f=>f.status==="active").length+" account(s)", "var(--text)"],
+            ].map(([l,v,c])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid var(--border)"}}>
+                <span style={{fontSize:12,color:"var(--muted)"}}>{l}</span>
+                <span style={{fontSize:12,fontWeight:700,color:c}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }
