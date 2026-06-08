@@ -371,36 +371,45 @@ export default function App() {
     showToast("✅ Payment saved!");
   }
 
-  // ── Derived data for selected month
+  // ── Derived data for selected month ──────────────────────────
   const monthBills    = allBills.filter(b=>b.billing_month===selectedMonth);
   const monthExpenses = allExpenses.filter(e=>e.billing_month===selectedMonth);
-  const flatBill      = (flatId) => monthBills.find(b=>b.flat_id===flatId);
-  const flatStatus    = (flatId) => {
+
+  // flatBill: find bill for a flat in selected month
+  const flatBill = (flatId) => monthBills.find(b=>b.flat_id===flatId);
+
+  // flatStatus: use bill status if bill exists, else vacant/unknown
+  const flatStatus = (flatId) => {
     const f = flats.find(x=>x.id===flatId);
-    if(!f||f.status==="vacant") return "vacant";
+    if(!f || f.status==="vacant") return "vacant";
     const b = flatBill(flatId);
-    return b ? b.status : "overdue";
+    if(!b) return "vacant"; // no bill = no data for that month
+    return b.status;
   };
 
-  // ── All-time overdue: flats with any unpaid month
+  // ── All-time overdue: only bills explicitly marked overdue with arrears > 0
   const overdueByFlat = {};
-  allBills.filter(b=>b.status==="overdue"||b.status==="unpaid").forEach(b=>{
-    if(!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id]=[];
-    overdueByFlat[b.flat_id].push({month:b.billing_month, amount:b.arrears||b.total_amount});
-  });
+  allBills
+    .filter(b => b.status==="overdue" && (b.arrears||0) > 0)
+    .forEach(b => {
+      if(!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
+      overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
+    });
 
   const totalOverdueAmount = Object.values(overdueByFlat)
-    .flat().reduce((s,x)=>s+(x.amount||0),0);
+    .flat().reduce((s,x) => s + (x.amount||0), 0);
 
-  // ── Monthly stats
+  // ── Monthly stats — use bill total_amount (reflects correct slab for that month)
   const collected  = monthBills.filter(b=>b.status==="paid").reduce((s,b)=>s+b.total_amount,0);
-  const totalDues  = monthBills.filter(b=>b.status==="overdue"||b.status==="unpaid").reduce((s,b)=>s+(b.arrears||b.total_amount||0),0);
-  const expected   = flats.filter(f=>f.status!=="vacant").reduce((s,f)=>s+f.monthly_charge,0);
+  const totalDues  = monthBills.filter(b=>b.status==="overdue").reduce((s,b)=>s+(b.arrears||b.total_amount||0),0);
+  // expected = sum of total_amount for all active flats in selected month (correct historical slab)
+  const expected   = monthBills.filter(b=>b.status!=="vacant").reduce((s,b)=>s+b.total_amount,0)
+                     || flats.filter(f=>f.status!=="vacant").reduce((s,f)=>s+f.monthly_charge,0);
   const paidCnt    = monthBills.filter(b=>b.status==="paid").length;
-  const overdCnt   = monthBills.filter(b=>b.status==="overdue"||b.status==="unpaid").length;
+  const overdCnt   = monthBills.filter(b=>b.status==="overdue").length;
   const monthlyExp = monthExpenses.reduce((s,e)=>s+e.amount,0);
   const totalExp   = allExpenses.reduce((s,e)=>s+e.amount,0);
-  const collPct    = expected>0?Math.round((collected/expected)*100):0;
+  const collPct    = expected>0 ? Math.round((collected/expected)*100) : 0;
 
   const filteredFlats = flats.filter(f=>{
     const s = flatStatus(f.id);
@@ -540,22 +549,22 @@ function MonthSelector({selectedMonth, setSelectedMonth}) {
 }
 
 // ── Home Tab ──────────────────────────────────────────────────
-function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,
+function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,acctSettings,
   selectedMonth,setSelectedMonth,collected,totalDues,expected,paidCnt,overdCnt,
   monthlyExp,monthBills,overdueByFlat,totalOverdueAmount,setSelectedFlat,setTab,showToast}) {
   const activeFlats = flats.filter(f=>f.status!=="vacant").length;
   const partCnt = monthBills.filter(b=>b.status==="partial").length;
 
-  // ── Complete bank balance calculation ───────────────────────
-  const openingBal  = otherIncome.find(x=>x.source==="Opening Bank Balance")?.amount || 105520.31;
-  const totalMaint  = allPayments.reduce((s,p)=>s+(p.amount_paid||0),0);
-  const totalOther  = otherIncome.filter(x=>x.source!=="Opening Bank Balance").reduce((s,x)=>s+(x.amount||0),0);
-  const totalCorpus = corpusData.reduce((s,c)=>s+(c.amount||0),0);
-  const fdMatured   = fdData.filter(f=>f.status==="matured").reduce((s,f)=>s+(f.matured_amount||0),0);
-  const fdActive    = fdData.filter(f=>f.status==="active").reduce((s,f)=>s+(f.invested_amount||0),0);
-  const totalIncome = openingBal + totalMaint + totalOther + totalCorpus + fdMatured;
-  const totalExp    = allExpenses.reduce((s,e)=>s+(e.amount||0),0);
-  const bankBalance = totalIncome - totalExp;
+  // ── Bank balance — prefer pre-computed values from account_settings
+  const openingBal   = parseFloat(acctSettings?.opening_balance   || 105520.31);
+  const totalMaint   = parseFloat(acctSettings?.total_maintenance  || 0) || allPayments.reduce((s,p)=>s+(p.amount_paid||0),0);
+  const totalOther   = parseFloat(acctSettings?.total_other_income || 0);
+  const totalCorpus  = parseFloat(acctSettings?.total_corpus       || 0) || corpusData.reduce((s,c)=>s+(c.amount||0),0);
+  const fdMatured    = parseFloat(acctSettings?.total_fd_matured   || 0);
+  const fdActive     = parseFloat(acctSettings?.active_fd_amount   || 0);
+  const totalExpAmt  = parseFloat(acctSettings?.total_expenses     || 0) || allExpenses.reduce((s,e)=>s+(e.amount||0),0);
+  const totalIncome  = openingBal + totalMaint + totalOther + totalCorpus + fdMatured;
+  const bankBalance  = totalIncome - totalExpAmt;
 
   return (
     <>
@@ -586,7 +595,7 @@ function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
               {[
                 ["Total Income",  fmt(totalIncome),  "#7DCEA0"],
-                ["Total Expenses",fmt(totalExp),     "#E08080"],
+                ["Total Expenses",fmt(totalExpAmt),  "#E08080"],
                 ["FD Asset",      fmt(fdActive),     "#D4A853"],
               ].map(([l,v,c])=>(
                 <div key={l}>
@@ -596,7 +605,7 @@ function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,
               ))}
             </div>
             <div style={{marginTop:10,fontSize:10,color:"rgba(255,255,255,.3)"}}>
-              Opening ₹1,05,520 + Maint ₹{Math.round(totalMaint/100000*10)/10}L + Other ₹{Math.round((totalOther+totalCorpus+fdMatured)/1000)}K − Expenses ₹{Math.round(totalExp/100000*10)/10}L
+              Opening {fmt(openingBal)} + Maint {fmt(totalMaint)} + Corpus {fmt(totalCorpus)} + Other {fmt(totalOther+fdMatured)} − Exp {fmt(totalExpAmt)}
             </div>
           </div>
         </div>
