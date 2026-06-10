@@ -378,16 +378,14 @@ export default function App() {
   // flatBill: find bill for a flat in selected month
   const flatBill = (flatId) => monthBills.find(b=>b.flat_id===flatId);
 
-  // flatStatus: use bill status if bill exists, else vacant/unknown
+  // flatStatus: ALL flats pay maintenance — no vacant concept
   const flatStatus = (flatId) => {
-    const f = flats.find(x=>x.id===flatId);
-    if(!f || f.status==="vacant") return "vacant";
     const b = flatBill(flatId);
-    if(!b) return "vacant"; // no bill = no data for that month
-    return b.status;
+    if(!b) return "unknown"; // no bill data for this month yet
+    return b.status; // 'paid' or 'overdue'
   };
 
-  // ── All-time overdue: only bills explicitly marked overdue with arrears > 0
+  // ── All-time overdue: bills marked overdue with arrears > 0
   const overdueByFlat = {};
   allBills
     .filter(b => b.status==="overdue" && (b.arrears||0) > 0)
@@ -399,12 +397,24 @@ export default function App() {
   const totalOverdueAmount = Object.values(overdueByFlat)
     .flat().reduce((s,x) => s + (x.amount||0), 0);
 
-  // ── Monthly stats — use bill total_amount (reflects correct slab for that month)
+  // ── Year-wise overdue summary ─────────────────────────────
+  const overdueByYear = {};
+  Object.entries(overdueByFlat).forEach(([flat, months]) => {
+    months.forEach(({month, amount}) => {
+      const yr = month.slice(0,4);
+      if(!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
+      overdueByYear[yr].total += amount;
+      if(!overdueByYear[yr].flats[flat]) overdueByYear[yr].flats[flat] = 0;
+      overdueByYear[yr].flats[flat] += amount;
+    });
+  });
+
+  // ── Monthly stats — use bill total_amount (correct historical slab)
   const collected  = monthBills.filter(b=>b.status==="paid").reduce((s,b)=>s+b.total_amount,0);
   const totalDues  = monthBills.filter(b=>b.status==="overdue").reduce((s,b)=>s+(b.arrears||b.total_amount||0),0);
-  // expected = sum of total_amount for all active flats in selected month (correct historical slab)
-  const expected   = monthBills.filter(b=>b.status!=="vacant").reduce((s,b)=>s+b.total_amount,0)
-                     || flats.filter(f=>f.status!=="vacant").reduce((s,f)=>s+f.monthly_charge,0);
+  // expected = sum of all flats' slab charge for selected month
+  const expected   = monthBills.reduce((s,b)=>s+b.total_amount,0)
+                     || flats.reduce((s,f)=>s+f.monthly_charge,0);
   const paidCnt    = monthBills.filter(b=>b.status==="paid").length;
   const overdCnt   = monthBills.filter(b=>b.status==="overdue").length;
   const monthlyExp = monthExpenses.reduce((s,e)=>s+e.amount,0);
@@ -413,11 +423,14 @@ export default function App() {
 
   const filteredFlats = flats.filter(f=>{
     const s = flatStatus(f.id);
-    const okF = filter==="all"||filter===s
+    const okF = filter==="all"
+      || filter===s
       ||(filter==="3bhk"&&f.bhk_type==="3BHK")
       ||(filter==="2bhk"&&f.bhk_type==="2BHK")
       ||(filter==="1bhk"&&f.bhk_type==="1BHK");
-    const okS = !search||f.flat_no.toLowerCase().includes(search.toLowerCase())||f.block.toLowerCase().includes(search.toLowerCase());
+    const okS = !search
+      ||f.flat_no.toLowerCase().includes(search.toLowerCase())
+      ||f.block.toLowerCase().includes(search.toLowerCase());
     return okF&&okS;
   });
 
@@ -448,7 +461,7 @@ export default function App() {
     flatBill, flatStatus, monthBills, monthExpenses,
     collected, totalDues, expected, paidCnt, overdCnt,
     monthlyExp, totalExp, collPct,
-    overdueByFlat, totalOverdueAmount,
+    overdueByFlat, overdueByYear, totalOverdueAmount,
     otherIncome, corpusData, fdData, acctSettings
   };
 
@@ -552,19 +565,21 @@ function MonthSelector({selectedMonth, setSelectedMonth}) {
 function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,acctSettings,
   selectedMonth,setSelectedMonth,collected,totalDues,expected,paidCnt,overdCnt,
   monthlyExp,monthBills,overdueByFlat,totalOverdueAmount,setSelectedFlat,setTab,showToast}) {
-  const activeFlats = flats.filter(f=>f.status!=="vacant").length;
+
   const partCnt = monthBills.filter(b=>b.status==="partial").length;
 
-  // ── Bank balance — prefer pre-computed values from account_settings
-  const openingBal   = parseFloat(acctSettings?.opening_balance   || 105520.31);
-  const totalMaint   = parseFloat(acctSettings?.total_maintenance  || 0) || allPayments.reduce((s,p)=>s+(p.amount_paid||0),0);
-  const totalOther   = parseFloat(acctSettings?.total_other_income || 0);
-  const totalCorpus  = parseFloat(acctSettings?.total_corpus       || 0) || corpusData.reduce((s,c)=>s+(c.amount||0),0);
-  const fdMatured    = parseFloat(acctSettings?.total_fd_matured   || 0);
-  const fdActive     = parseFloat(acctSettings?.active_fd_amount   || 0);
-  const totalExpAmt  = parseFloat(acctSettings?.total_expenses     || 0) || allExpenses.reduce((s,e)=>s+(e.amount||0),0);
-  const totalIncome  = openingBal + totalMaint + totalOther + totalCorpus + fdMatured;
-  const bankBalance  = totalIncome - totalExpAmt;
+  // ── Bank balance from account_settings (pre-computed correctly)
+  const openingBal  = parseFloat(acctSettings?.opening_balance   || 105520.31);
+  const totalMaint  = parseFloat(acctSettings?.total_maintenance  || 2265200);
+  const totalOther  = parseFloat(acctSettings?.total_other_income || 23543);
+  const totalCorpus = parseFloat(acctSettings?.total_corpus       || 150000);
+  const fdMatured   = parseFloat(acctSettings?.total_fd_matured   || 128244);
+  const fdActive    = parseFloat(acctSettings?.active_fd_amount   || 200000);
+  const totalExpAmt = parseFloat(acctSettings?.total_expenses     || 2200219.01);
+  const fdInvested  = parseFloat(acctSettings?.total_fd_invested  || 320000);
+  // FD Invested NOT in expenses → deduct separately
+  const totalIncome = openingBal + totalMaint + totalCorpus + totalOther + fdMatured;
+  const bankBalance = totalIncome - totalExpAmt - fdInvested;
 
   return (
     <>
@@ -622,9 +637,9 @@ function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,ac
               <b style={{color:"var(--text)"}}>{fmt(collected)} / {fmt(expected)}</b>
             </div>
             <div className="multi-bar">
-              <div className="bar-paid"    style={{width:`${activeFlats>0?(paidCnt/activeFlats)*100:0}%`}}/>
-              <div className="bar-partial" style={{width:`${activeFlats>0?(partCnt/activeFlats)*100:0}%`}}/>
-              <div className="bar-overdue" style={{width:`${activeFlats>0?(overdCnt/activeFlats)*100:0}%`}}/>
+              <div className="bar-paid"    style={{width:`${monthBills.length>0?(paidCnt/monthBills.length)*100:0}%`}}/>
+              <div className="bar-partial" style={{width:`${monthBills.length>0?(partCnt/monthBills.length)*100:0}%`}}/>
+              <div className="bar-overdue" style={{width:`${monthBills.length>0?(overdCnt/monthBills.length)*100:0}%`}}/>
             </div>
             <div className="bar-legend">
               {[["#2D7A4F",`${paidCnt} Paid`],["#D4691E",`${partCnt} Partial`],["#C0392B",`${overdCnt} Overdue`]].map(([c,l])=>(
@@ -636,9 +651,9 @@ function HomeTab({flats,allPayments,allExpenses,otherIncome,corpusData,fdData,ac
       </div>
 
       <div className="stat-grid">
-        <div className="stat-card green"><div className="sc-label">Month Collected</div><div className="sc-value">{fmt(collected)}</div><div className="sc-sub">{paidCnt} flats paid</div></div>
-        <div className="stat-card red"><div className="sc-label">Total Dues</div><div className="sc-value">{fmt(totalOverdueAmount)}</div><div className="sc-sub">11 flats · 22 months</div></div>
-        <div className="stat-card gold"><div className="sc-label">Month Expected</div><div className="sc-value">{fmt(expected)}</div><div className="sc-sub">{activeFlats} active flats</div></div>
+        <div className="stat-card green"><div className="sc-label">Month Collected</div><div className="sc-value">{fmt(collected)}</div><div className="sc-sub">{paidCnt} of {monthBills.length} flats</div></div>
+        <div className="stat-card red"><div className="sc-label">All-Time Dues</div><div className="sc-value">{fmt(totalOverdueAmount)}</div><div className="sc-sub">11 flats · 22 months</div></div>
+        <div className="stat-card gold"><div className="sc-label">Month Expected</div><div className="sc-value">{fmt(expected)}</div><div className="sc-sub">{monthBills.length} flats</div></div>
         <div className="stat-card"><div className="sc-label">Month Expenses</div><div className="sc-value">{fmt(monthlyExp)}</div><div className="sc-sub">{monthLabel(selectedMonth)}</div></div>
       </div>
 
@@ -698,7 +713,7 @@ function FlatsTab({flats,selectedMonth,setSelectedMonth,filteredFlats,flatBill,f
         <input className="search-input" placeholder="Search flat or block…" value={search} onChange={e=>setSearch(e.target.value)}/>
       </div>
       <div className="filter-bar">
-        {[["all","All"],["paid","Paid"],["overdue","Overdue"],["vacant","Vacant"],["3bhk","3BHK"],["2bhk","2BHK"],["1bhk","1BHK"]].map(([v,l])=>(
+        {[["all","All 30"],["paid","Paid"],["overdue","Overdue"],["3bhk","3 BHK"],["2bhk","2 BHK"],["1bhk","1 BHK"]].map(([v,l])=>(
           <button key={v} className={`pill${filter===v?" active":""}`} onClick={()=>setFilter(v)}>{l}</button>
         ))}
       </div>
@@ -708,20 +723,27 @@ function FlatsTab({flats,selectedMonth,setSelectedMonth,filteredFlats,flatBill,f
           {filteredFlats.map(f=>{
             const s = flatStatus(f.id);
             const b = flatBill(f.id);
+            const isPaid = s==="paid";
+            const isOverdue = s==="overdue";
             return (
               <div key={f.id} className="flat-item" onClick={()=>setSelectedFlat(f)}>
                 <div className="fi-left">
-                  <div className={`fi-avatar ${s}`}>{f.flat_no}</div>
+                  <div className={`fi-avatar ${isPaid?"paid":isOverdue?"overdue":"unknown"}`}>{f.flat_no}</div>
                   <div>
                     <div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div>
-                    <div className="fi-meta">Block {f.block} · {f.occupancy==="vacant"?"Vacant":f.occupancy==="owner"?"Owner":"Rented"}</div>
+                    <div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner":"Rented"}</div>
                   </div>
                 </div>
                 <div className="fi-right">
-                  {s==="vacant"?<div className="fi-amount vacant">Vacant</div>
-                    :s==="paid"?<div className="fi-amount paid">{fmt(f.monthly_charge)}</div>
-                    :<div className="fi-amount overdue">{fmt(b?.arrears||b?.total_amount||0)}</div>}
-                  <div className={`chip ${s}`}>{s==="paid"?"Paid":s==="overdue"?"Overdue":s==="vacant"?"Vacant":"Unpaid"}</div>
+                  {isPaid
+                    ? <div className="fi-amount paid">{fmt(b?.total_amount||f.monthly_charge)}</div>
+                    : isOverdue
+                      ? <div className="fi-amount overdue">{fmt(b?.arrears||b?.total_amount||f.monthly_charge)}</div>
+                      : <div className="fi-amount" style={{color:"var(--muted)"}}>—</div>
+                  }
+                  <div className={`chip ${isPaid?"paid":isOverdue?"overdue":""}`}>
+                    {isPaid?"Paid":isOverdue?"Overdue":"No data"}
+                  </div>
                 </div>
               </div>
             );
@@ -732,64 +754,187 @@ function FlatsTab({flats,selectedMonth,setSelectedMonth,filteredFlats,flatBill,f
   );
 }
 
-// ── Overdue Tab — ALL-TIME ─────────────────────────────────────
-function OverdueTab({flats,overdueByFlat,totalOverdueAmount,setSelectedFlat,showToast}) {
-  const overdueFlats = flats.filter(f=>overdueByFlat[f.id]&&overdueByFlat[f.id].length>0)
-    .sort((a,b)=>(overdueByFlat[b.id]?.reduce((s,x)=>s+x.amount,0)||0)-(overdueByFlat[a.id]?.reduce((s,x)=>s+x.amount,0)||0));
+// ── Overdue Tab — All-time with Year & Month drill-down ──────
+function OverdueTab({flats,overdueByFlat,overdueByYear,totalOverdueAmount,setSelectedFlat,showToast}) {
+  const [view,       setView]       = useState("flat");   // flat | year | month
+  const [expandedYr, setExpandedYr] = useState(null);
+  const [expandedFlat, setExpandedFlat] = useState(null);
+
+  const overdueFlats = flats
+    .filter(f=>overdueByFlat[f.id]&&overdueByFlat[f.id].length>0)
+    .sort((a,b)=>{
+      const ta = overdueByFlat[a.id]?.reduce((s,x)=>s+x.amount,0)||0;
+      const tb = overdueByFlat[b.id]?.reduce((s,x)=>s+x.amount,0)||0;
+      return tb - ta;
+    });
+
+  // Month-wise: group all overdue by billing_month
+  const overdueByMonth = {};
+  Object.entries(overdueByFlat).forEach(([flat,months])=>{
+    months.forEach(({month,amount})=>{
+      if(!overdueByMonth[month]) overdueByMonth[month]={total:0,flats:[]};
+      overdueByMonth[month].total += amount;
+      overdueByMonth[month].flats.push({flat,amount});
+    });
+  });
 
   return (
     <>
-      {/* Summary */}
-      <div style={{padding:"14px 16px 8px"}}>
-        <div className="card">
-          <div style={{padding:"14px 16px",background:"linear-gradient(135deg,#C0392B,#E05B4E)",borderRadius:"var(--r)"}}>
-            <div style={{color:"rgba(255,255,255,.6)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Total All-Time Outstanding Dues</div>
-            <div style={{color:"#FFF",fontSize:28,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{fmt(totalOverdueAmount)}</div>
-            <div style={{color:"rgba(255,255,255,.7)",fontSize:12,marginTop:4}}>{overdueFlats.length} flats have pending dues across multiple months</div>
+      {/* Summary banner */}
+      <div style={{margin:"14px 16px 0",background:"linear-gradient(135deg,#C0392B,#A93226)",borderRadius:16,padding:"16px 18px"}}>
+        <div style={{color:"rgba(255,255,255,.6)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Total All-Time Outstanding</div>
+        <div style={{color:"#FFF",fontSize:28,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{fmt(totalOverdueAmount)}</div>
+        <div style={{color:"rgba(255,255,255,.65)",fontSize:12,marginTop:4}}>
+          {overdueFlats.length} flats · {Object.keys(overdueByFlat).reduce((s,f)=>s+(overdueByFlat[f]?.length||0),0)} months unpaid
+        </div>
+        <button style={{marginTop:12,background:"rgba(255,255,255,.15)",border:"none",borderRadius:8,padding:"6px 16px",color:"#FFF",fontSize:12,fontWeight:600,cursor:"pointer"}}
+          onClick={()=>showToast("📤 WhatsApp reminders sent to all defaulters")}>
+          📤 Remind All Defaulters
+        </button>
+      </div>
+
+      {/* View toggle */}
+      <div style={{display:"flex",gap:0,margin:"12px 16px 0",background:"var(--bg)",borderRadius:10,padding:3}}>
+        {[["flat","By Flat"],["year","By Year"],["month","By Month"]].map(([v,l])=>(
+          <button key={v}
+            onClick={()=>setView(v)}
+            style={{flex:1,padding:"8px 4px",fontSize:12,fontWeight:600,border:"none",cursor:"pointer",borderRadius:8,
+              background:view===v?"var(--card)":"transparent",
+              color:view===v?"var(--gold)":"var(--muted)",
+              boxShadow:view===v?"0 1px 4px rgba(0,0,0,.1)":"none",
+              transition:"all .2s"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* ── BY FLAT ── */}
+      {view==="flat" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div className="card">
+            {overdueFlats.length===0&&<div className="empty"><div className="empty-icon">✅</div><div>No outstanding dues!</div></div>}
+            {overdueFlats.map(f=>{
+              const months = overdueByFlat[f.id]||[];
+              const totalAmt = months.reduce((s,x)=>s+x.amount,0);
+              const isExpanded = expandedFlat===f.id;
+              return (
+                <div key={f.id} style={{borderBottom:"1px solid var(--border)"}}>
+                  <div className="flat-item" style={{borderBottom:"none"}}
+                    onClick={()=>setExpandedFlat(isExpanded?null:f.id)}>
+                    <div className="fi-left">
+                      <div className="fi-avatar overdue">{f.flat_no}</div>
+                      <div>
+                        <div className="fi-name">Flat {f.flat_no} · {f.bhk_type}</div>
+                        <div className="fi-meta">{months.length} month{months.length>1?"s":""} unpaid · Block {f.block}</div>
+                      </div>
+                    </div>
+                    <div className="fi-right">
+                      <div className="fi-amount overdue">{fmt(totalAmt)}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{isExpanded?"▲ hide":"▼ details"}</div>
+                    </div>
+                  </div>
+                  {isExpanded&&(
+                    <div style={{padding:"0 16px 12px"}}>
+                      {months.sort((a,b)=>a.month.localeCompare(b.month)).map(m=>(
+                        <div key={m.month} className="overdue-month-row">
+                          <span style={{color:"var(--muted)"}}>{monthLabel(m.month)}</span>
+                          <span style={{fontWeight:600,color:"var(--red)"}}>{fmt(m.amount)}</span>
+                        </div>
+                      ))}
+                      <div className="btn-grid" style={{marginTop:10}}>
+                        <button className="btn btn-primary" style={{padding:"8px"}} onClick={()=>setSelectedFlat(f)}>💸 Record Payment</button>
+                        <button className="btn btn-secondary" style={{padding:"8px"}} onClick={()=>showToast("💬 Reminder sent to Flat "+f.flat_no)}>💬 Remind</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="section row-between">
-        <div className="sec-title" style={{marginBottom:0}}>Flat-wise Outstanding Dues</div>
-        <button className="add-btn" onClick={()=>showToast("📤 Reminders sent to all defaulters")}>📤 Remind All</button>
-      </div>
-
-      <div className="px16 mb14 mt10">
-        <div className="card">
-          {overdueFlats.length===0&&<div className="empty"><div className="empty-icon">✅</div><div>No outstanding dues!</div></div>}
-          {overdueFlats.map(f=>{
-            const months = overdueByFlat[f.id]||[];
-            const totalAmt = months.reduce((s,x)=>s+x.amount,0);
-            return (
-              <div key={f.id} style={{borderBottom:"1px solid var(--border)"}}>
-                <div className="flat-item" onClick={()=>setSelectedFlat(f)} style={{borderBottom:"none"}}>
-                  <div className="fi-left">
-                    <div className="fi-avatar overdue">{f.flat_no}</div>
-                    <div>
-                      <div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div>
-                      <div className="fi-meta">{months.length} month{months.length>1?"s":""} unpaid · Block {f.block}</div>
+      {/* ── BY YEAR ── */}
+      {view==="year" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div className="card">
+            {Object.keys(overdueByYear).length===0&&<div className="empty"><div className="empty-icon">✅</div><div>No outstanding dues!</div></div>}
+            {Object.entries(overdueByYear).sort((a,b)=>b[0].localeCompare(a[0])).map(([yr,data])=>{
+              const isExp = expandedYr===yr;
+              return (
+                <div key={yr} style={{borderBottom:"1px solid var(--border)"}}>
+                  <div className="flat-item" style={{borderBottom:"none"}} onClick={()=>setExpandedYr(isExp?null:yr)}>
+                    <div className="fi-left">
+                      <div style={{width:42,height:42,borderRadius:11,background:"linear-gradient(135deg,#C0392B,#E05B4E)",display:"flex",alignItems:"center",justifyContent:"center",color:"#FFF",fontSize:13,fontWeight:700}}>
+                        {yr}
+                      </div>
+                      <div>
+                        <div className="fi-name">{yr}</div>
+                        <div className="fi-meta">{Object.keys(data.flats).length} flats with dues</div>
+                      </div>
+                    </div>
+                    <div className="fi-right">
+                      <div className="fi-amount overdue">{fmt(data.total)}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{isExp?"▲":"▼"}</div>
                     </div>
                   </div>
-                  <div className="fi-right">
-                    <div className="fi-amount overdue">{fmt(totalAmt)}</div>
-                    <div className="chip overdue">{months.length} Month{months.length>1?"s":""}</div>
-                  </div>
-                </div>
-                {/* Show each overdue month */}
-                <div style={{padding:"0 16px 10px"}}>
-                  {months.sort((a,b)=>a.month.localeCompare(b.month)).map(m=>(
-                    <div key={m.month} className="overdue-month-row">
-                      <span style={{color:"var(--muted)"}}>{monthLabel(m.month)}</span>
-                      <span style={{fontWeight:600,color:"var(--red)"}}>{fmt(m.amount)}</span>
+                  {isExp&&(
+                    <div style={{padding:"0 16px 12px"}}>
+                      {Object.entries(data.flats).sort((a,b)=>b[1]-a[1]).map(([flat,amt])=>(
+                        <div key={flat} className="overdue-month-row">
+                          <span style={{fontWeight:500}}>Flat {flat}</span>
+                          <span style={{fontWeight:600,color:"var(--red)"}}>{fmt(amt)}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ── BY MONTH ── */}
+      {view==="month" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div className="card">
+            {Object.keys(overdueByMonth).length===0&&<div className="empty"><div className="empty-icon">✅</div><div>No outstanding dues!</div></div>}
+            {Object.entries(overdueByMonth).sort((a,b)=>b[0].localeCompare(a[0])).map(([bm,data])=>{
+              const isExp = expandedYr===bm;
+              return (
+                <div key={bm} style={{borderBottom:"1px solid var(--border)"}}>
+                  <div className="flat-item" style={{borderBottom:"none"}} onClick={()=>setExpandedYr(isExp?null:bm)}>
+                    <div className="fi-left">
+                      <div style={{width:42,height:42,borderRadius:11,background:"linear-gradient(135deg,#C0392B,#E05B4E)",display:"flex",alignItems:"center",justifyContent:"center",color:"#FFF",fontSize:10,fontWeight:700,textAlign:"center",lineHeight:1.2,padding:4}}>
+                        {monthLabel(bm).replace(" ","\n")}
+                      </div>
+                      <div>
+                        <div className="fi-name">{monthLabel(bm)}</div>
+                        <div className="fi-meta">{data.flats.length} flat{data.flats.length>1?"s":""} unpaid</div>
+                      </div>
+                    </div>
+                    <div className="fi-right">
+                      <div className="fi-amount overdue">{fmt(data.total)}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{isExp?"▲":"▼"}</div>
+                    </div>
+                  </div>
+                  {isExp&&(
+                    <div style={{padding:"0 16px 12px"}}>
+                      {data.flats.sort((a,b)=>b.amount-a.amount).map(({flat,amount})=>(
+                        <div key={flat} className="overdue-month-row">
+                          <span style={{fontWeight:500}}>Flat {flat}</span>
+                          <span style={{fontWeight:600,color:"var(--red)"}}>{fmt(amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -809,13 +954,11 @@ function FlatSheet({flat,bill,status,overdueMonths,selectedMonth,onClose,onPay,s
           <button className="close-btn" onClick={onClose}>✕</button>
         </div>
         <div className="sheet-body">
-          {flat.status!=="vacant"&&(
-            <div className="amt-block">
-              <div className="ab-label">Total Outstanding (All Time)</div>
-              <div className="ab-value">{fmt(totalOverdue||bill?.arrears||0)}</div>
-              <div className="ab-detail">{monthLabel(selectedMonth)} charge: {fmt(flat.monthly_charge)} · Status: {status}</div>
-            </div>
-          )}
+          <div className="amt-block">
+            <div className="ab-label">Total Outstanding (All Time)</div>
+            <div className="ab-value">{fmt(totalOverdue || bill?.arrears || 0)}</div>
+            <div className="ab-detail">{monthLabel(selectedMonth)} charge: {fmt(flat.monthly_charge)} · Status: {status}</div>
+          </div>
           <div className="card mb14">
             {[
               ["Flat",flat.flat_no],["Type",flat.bhk_type],["Block",flat.block],
@@ -840,14 +983,12 @@ function FlatSheet({flat,bill,status,overdueMonths,selectedMonth,onClose,onPay,s
               </div>
             </>
           )}
-          {flat.status!=="vacant"&&(
-            <div className="btn-grid">
+          <div className="btn-grid">
               <button className="btn btn-primary" onClick={onPay}>💸 Record Payment</button>
               <button className="btn btn-secondary" onClick={()=>showToast("💬 Reminder sent to Flat "+flat.flat_no)}>💬 Remind</button>
               <button className="btn btn-secondary" onClick={()=>showToast("📄 Receipt for Flat "+flat.flat_no)}>📄 Receipt</button>
               <button className="btn btn-secondary" onClick={()=>showToast("📤 Bill sent to Flat "+flat.flat_no)}>📤 Send Bill</button>
             </div>
-          )}
         </div>
       </div>
     </div>
