@@ -175,7 +175,8 @@ select.form-input{-webkit-appearance:none;appearance:none;cursor:pointer}
 .login-card{background:var(--card);border-radius:20px;padding:24px;width:100%;max-width:360px}
 .overdue-month-row{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:var(--bg);border-radius:8px;margin-bottom:6px;font-size:12px}
 .overdue-month-row:last-child{margin-bottom:0}
-.loading-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1A1410,#2C2018);flex-direction:column;gap:12px}
+.loading-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1A1410,#2C2018);flex-direction:column;gap:4px}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
 .income-tabs{display:flex;gap:0;padding:12px 16px 0;border-bottom:1px solid var(--border);background:var(--card);margin-bottom:2px}
 .income-tab{flex:1;padding:10px 4px;font-size:12px;font-weight:600;color:var(--muted);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;font-family:'DM Sans',sans-serif}
 .income-tab.active{color:var(--gold);border-bottom-color:var(--gold)}
@@ -270,6 +271,7 @@ export default function App() {
   const [session,       setSession]       = useState(null);
   const [userProfile,   setUserProfile]   = useState(null);
   const [loading,       setLoading]       = useState(true);
+  const [dataLoading,   setDataLoading]   = useState(false);
   const [tab,           setTab]           = useState("home");
   const [flats,         setFlats]         = useState([]);
   const [allBills,      setAllBills]      = useState([]);
@@ -294,7 +296,11 @@ export default function App() {
     if (saved) {
       try {
         const p = JSON.parse(saved);
-        setSession(p); setUserProfile(p.profile); setLoading(false); return;
+        setSession(p);
+        setUserProfile(p.profile);
+        setLoading(false);
+        // loadData will be triggered by the session useEffect below
+        return;
       } catch(e) { localStorage.removeItem("pallazo_temp_session"); }
     }
     supabase.auth.getSession().then(({data:{session}})=>{
@@ -308,7 +314,7 @@ export default function App() {
       else { setLoading(false); setUserProfile(null); }
     });
     return ()=>subscription.unsubscribe();
-  }, []);
+  }, [loadData]);  // include loadData so it triggers after mount
 
   async function loadUserProfile(uid) {
     const {data} = await supabase.from("users").select("*").eq("id",uid).single();
@@ -316,6 +322,7 @@ export default function App() {
   }
 
   const loadData = useCallback(async () => {
+    setDataLoading(true);
     const [{ data:f },{ data:b },{ data:p },{ data:e },{ data:n },{ data:oi },{ data:cp },{ data:fd },{ data:as }] = await Promise.all([
       supabase.from("flats").select("*").order("block").order("flat_no"),
       supabase.from("bills").select("*"),
@@ -340,9 +347,10 @@ export default function App() {
       as.forEach(row => { settings[row.key] = row.value; });
       setAcctSettings(settings);
     }
+    setDataLoading(false);
   }, []);
 
-  useEffect(()=>{ if(session) loadData(); },[session,loadData]);
+  useEffect(()=>{ if(session) loadData(); },[session, loadData]);
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(null),2800); }
 
@@ -452,6 +460,22 @@ export default function App() {
         else loadUserProfile(s.user.id);
         setSession(s);
       }}/>
+    </>
+  );
+
+  if(dataLoading || flats.length===0) return (
+    <>
+      <style>{CSS}</style>
+      <div className="loading-wrap">
+        <div style={{fontSize:44}}>🏛</div>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading apartment data…</div>
+        <div style={{marginTop:16,display:"flex",gap:6}}>
+          {[0,1,2].map(i=>(
+            <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"var(--gold-lt)",
+              animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>
+          ))}
+        </div>
+      </div>
     </>
   );
 
