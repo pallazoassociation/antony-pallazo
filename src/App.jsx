@@ -379,75 +379,13 @@ export default function App() {
     showToast("✅ Payment saved!");
   }
 
-  // ── Derived data for selected month ──────────────────────────
-  const monthBills    = allBills.filter(b=>b.billing_month===selectedMonth);
-  const monthExpenses = allExpenses.filter(e=>e.billing_month===selectedMonth);
-
-  // flatBill: find bill for a flat in selected month
-  const flatBill = (flatId) => monthBills.find(b=>b.flat_id===flatId);
-
-  // flatStatus: ALL flats pay maintenance — no vacant concept
-  const flatStatus = (flatId) => {
-    const b = flatBill(flatId);
-    if(!b) return "unknown"; // no bill data for this month yet
-    return b.status; // 'paid' or 'overdue'
-  };
-
-  // ── All-time overdue: bills marked overdue with arrears > 0
-  const overdueByFlat = {};
-  allBills
-    .filter(b => b.status==="overdue" && (b.arrears||0) > 0)
-    .forEach(b => {
-      if(!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
-      overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
-    });
-
-  const totalOverdueAmount = Object.values(overdueByFlat)
-    .flat().reduce((s,x) => s + (x.amount||0), 0);
-
-  // ── Year-wise overdue summary ─────────────────────────────
-  const overdueByYear = {};
-  Object.entries(overdueByFlat).forEach(([flat, months]) => {
-    months.forEach(({month, amount}) => {
-      const yr = month.slice(0,4);
-      if(!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
-      overdueByYear[yr].total += amount;
-      if(!overdueByYear[yr].flats[flat]) overdueByYear[yr].flats[flat] = 0;
-      overdueByYear[yr].flats[flat] += amount;
-    });
-  });
-
-  // ── Monthly stats — use bill total_amount (correct historical slab)
-  const collected  = monthBills.filter(b=>b.status==="paid").reduce((s,b)=>s+b.total_amount,0);
-  const totalDues  = monthBills.filter(b=>b.status==="overdue").reduce((s,b)=>s+(b.arrears||b.total_amount||0),0);
-  // expected = sum of all flats' slab charge for selected month
-  const expected   = monthBills.reduce((s,b)=>s+b.total_amount,0)
-                     || flats.reduce((s,f)=>s+f.monthly_charge,0);
-  const paidCnt    = monthBills.filter(b=>b.status==="paid").length;
-  const overdCnt   = monthBills.filter(b=>b.status==="overdue").length;
-  const monthlyExp = monthExpenses.reduce((s,e)=>s+e.amount,0);
-  const totalExp   = allExpenses.reduce((s,e)=>s+e.amount,0);
-  const collPct    = expected>0 ? Math.round((collected/expected)*100) : 0;
-
-  const filteredFlats = flats.filter(f=>{
-    const s = flatStatus(f.id);
-    const okF = filter==="all"
-      || filter===s
-      ||(filter==="3bhk"&&f.bhk_type==="3BHK")
-      ||(filter==="2bhk"&&f.bhk_type==="2BHK")
-      ||(filter==="1bhk"&&f.bhk_type==="1BHK");
-    const okS = !search
-      ||f.flat_no.toLowerCase().includes(search.toLowerCase())
-      ||f.block.toLowerCase().includes(search.toLowerCase());
-    return okF&&okS;
-  });
-
+  // ── Guards — must be before any derived calculations ─────────
   if(loading) return (
     <>
       <style>{CSS}</style>
       <div className="loading-wrap">
         <div style={{fontSize:44}}>🏛</div>
-        <div style={{color:"rgba(255,255,255,.5)",fontSize:13}}>Loading Antony Pallazo…</div>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading…</div>
       </div>
     </>
   );
@@ -471,13 +409,58 @@ export default function App() {
         <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading apartment data…</div>
         <div style={{marginTop:16,display:"flex",gap:6}}>
           {[0,1,2].map(i=>(
-            <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"var(--gold-lt)",
+            <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#D4A853",
               animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>
           ))}
         </div>
       </div>
     </>
   );
+
+  // ── Derived data (safe — data is loaded) ─────────────────────
+  const monthBills    = allBills.filter(b=>b.billing_month===selectedMonth);
+  const monthExpenses = allExpenses.filter(e=>e.billing_month===selectedMonth);
+  const flatBill      = (flatId) => monthBills.find(b=>b.flat_id===flatId);
+  const flatStatus    = (flatId) => { const b=flatBill(flatId); return b?b.status:"overdue"; };
+
+  const overdueByFlat = {};
+  allBills.filter(b=>b.status==="overdue"&&(b.arrears||0)>0).forEach(b=>{
+    if(!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id]=[];
+    overdueByFlat[b.flat_id].push({month:b.billing_month,amount:b.arrears});
+  });
+  const totalOverdueAmount = Object.values(overdueByFlat).flat().reduce((s,x)=>s+(x.amount||0),0);
+
+  const overdueByYear = {};
+  Object.entries(overdueByFlat).forEach(([flat,months])=>{
+    months.forEach(({month,amount})=>{
+      const yr=month.slice(0,4);
+      if(!overdueByYear[yr]) overdueByYear[yr]={total:0,flats:{}};
+      overdueByYear[yr].total+=amount;
+      if(!overdueByYear[yr].flats[flat]) overdueByYear[yr].flats[flat]=0;
+      overdueByYear[yr].flats[flat]+=amount;
+    });
+  });
+
+  const collected  = monthBills.filter(b=>b.status==="paid").reduce((s,b)=>s+b.total_amount,0);
+  const totalDues  = monthBills.filter(b=>b.status==="overdue").reduce((s,b)=>s+(b.arrears||b.total_amount||0),0);
+  const expected   = monthBills.reduce((s,b)=>s+b.total_amount,0)||flats.reduce((s,f)=>s+f.monthly_charge,0);
+  const paidCnt    = monthBills.filter(b=>b.status==="paid").length;
+  const overdCnt   = monthBills.filter(b=>b.status==="overdue").length;
+  const monthlyExp = monthExpenses.reduce((s,e)=>s+e.amount,0);
+  const totalExp   = allExpenses.reduce((s,e)=>s+e.amount,0);
+  const collPct    = expected>0?Math.round((collected/expected)*100):0;
+
+  const filteredFlats = flats.filter(f=>{
+    const s=flatStatus(f.id);
+    const okF=filter==="all"||filter===s
+      ||(filter==="3bhk"&&f.bhk_type==="3BHK")
+      ||(filter==="2bhk"&&f.bhk_type==="2BHK")
+      ||(filter==="1bhk"&&f.bhk_type==="1BHK");
+    const okS=!search
+      ||f.flat_no.toLowerCase().includes(search.toLowerCase())
+      ||f.block.toLowerCase().includes(search.toLowerCase());
+    return okF&&okS;
+  });
 
   const sharedProps = {
     flats, allBills, allPayments, allExpenses, notices, showToast, setTab,
