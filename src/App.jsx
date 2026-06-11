@@ -379,58 +379,20 @@ export default function App() {
     showToast("✅ Payment saved!");
   }
 
-  // ── Guards — must be before any derived calculations ─────────
-  if(loading) return (
-    <>
-      <style>{CSS}</style>
-      <div className="loading-wrap">
-        <div style={{fontSize:44}}>🏛</div>
-        <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading…</div>
-      </div>
-    </>
-  );
+  // ── Derived data (always computed — safe with empty arrays) ──
+  const monthBills     = allBills.filter(b=>b.billing_month===selectedMonth);
+  const monthExpenses  = allExpenses.filter(e=>e.billing_month===selectedMonth);
+  const flatBill       = (flatId) => monthBills.find(b=>b.flat_id===flatId);
+  const flatStatus     = (flatId) => { const b=flatBill(flatId); return b?b.status:"overdue"; };
 
-  if(!session) return (
-    <>
-      <style>{CSS}</style>
-      <LoginScreen onLogin={s=>{
-        if(s.temp){ localStorage.setItem("pallazo_temp_session",JSON.stringify(s)); setUserProfile(s.profile); }
-        else loadUserProfile(s.user.id);
-        setSession(s);
-      }}/>
-    </>
-  );
-
-  if(dataLoading || flats.length===0) return (
-    <>
-      <style>{CSS}</style>
-      <div className="loading-wrap">
-        <div style={{fontSize:44}}>🏛</div>
-        <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading apartment data…</div>
-        <div style={{marginTop:16,display:"flex",gap:6}}>
-          {[0,1,2].map(i=>(
-            <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#D4A853",
-              animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-
-  // ── Derived data (safe — data is loaded) ─────────────────────
-  const monthBills    = allBills.filter(b=>b.billing_month===selectedMonth);
-  const monthExpenses = allExpenses.filter(e=>e.billing_month===selectedMonth);
-  const flatBill      = (flatId) => monthBills.find(b=>b.flat_id===flatId);
-  const flatStatus    = (flatId) => { const b=flatBill(flatId); return b?b.status:"overdue"; };
-
-  const overdueByFlat = {};
+  const overdueByFlat  = {};
   allBills.filter(b=>b.status==="overdue"&&(b.arrears||0)>0).forEach(b=>{
     if(!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id]=[];
     overdueByFlat[b.flat_id].push({month:b.billing_month,amount:b.arrears});
   });
   const totalOverdueAmount = Object.values(overdueByFlat).flat().reduce((s,x)=>s+(x.amount||0),0);
 
-  const overdueByYear = {};
+  const overdueByYear  = {};
   Object.entries(overdueByFlat).forEach(([flat,months])=>{
     months.forEach(({month,amount})=>{
       const yr=month.slice(0,4);
@@ -461,6 +423,42 @@ export default function App() {
       ||f.block.toLowerCase().includes(search.toLowerCase());
     return okF&&okS;
   });
+
+  // ── Render guards — use conditional rendering, NOT early returns ──
+  const isLoading    = loading;
+  const isNoSession  = !session;
+  const isDataWait   = !loading && session && (dataLoading || flats.length===0);
+
+  if(isLoading || isNoSession || isDataWait) return (
+    <>
+      <style>{CSS}</style>
+      {isLoading && (
+        <div className="loading-wrap">
+          <div style={{fontSize:44}}>🏛</div>
+          <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading Antony Pallazo…</div>
+        </div>
+      )}
+      {isNoSession && !isLoading && (
+        <LoginScreen onLogin={s=>{
+          if(s.temp){ localStorage.setItem("pallazo_temp_session",JSON.stringify(s)); setUserProfile(s.profile); }
+          else loadUserProfile(s.user.id);
+          setSession(s);
+        }}/>
+      )}
+      {isDataWait && (
+        <div className="loading-wrap">
+          <div style={{fontSize:44}}>🏛</div>
+          <div style={{color:"rgba(255,255,255,.5)",fontSize:13,marginTop:8}}>Loading apartment data…</div>
+          <div style={{marginTop:16,display:"flex",gap:6}}>
+            {[0,1,2].map(i=>(
+              <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#D4A853",
+                animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   const sharedProps = {
     flats, allBills, allPayments, allExpenses, notices, showToast, setTab,
