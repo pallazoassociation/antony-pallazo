@@ -111,7 +111,7 @@ function getBill(bills, flatId, month) {
 }
 
 function getStatus(bill) {
-  if (!bill) return "overdue";
+  if (!bill) return "paid"; // no bill = treat as paid (data gap), not overdue
   return bill.status;
 }
 
@@ -121,15 +121,17 @@ export default function App() {
   var [appLoading, setAppLoading] = useState(true);
   var [dataLoading, setDataLoading] = useState(false);
   var [tab, setTab] = useState("home");
-  var [flats, setFlats] = useState([]);
-  var [allBills, setAllBills] = useState([]);
-  var [allPayments, setAllPayments] = useState([]);
-  var [allExpenses, setAllExpenses] = useState([]);
-  var [notices, setNotices] = useState([]);
-  var [otherIncome, setOtherIncome] = useState([]);
-  var [corpusData, setCorpusData] = useState([]);
-  var [fdData, setFdData] = useState([]);
-  var [acctSettings, setAcctSettings] = useState({});
+  var [flats,            setFlats]            = useState([]);
+  var [monthlySummaries, setMonthlySummaries] = useState([]);
+  var [monthBillsData,   setMonthBillsData]   = useState([]);
+  var [overdueBills,     setOverdueBills]     = useState([]);
+  var [allPayments,      setAllPayments]      = useState([]);
+  var [allExpenses,      setAllExpenses]      = useState([]);
+  var [notices,          setNotices]          = useState([]);
+  var [otherIncome,      setOtherIncome]      = useState([]);
+  var [corpusData,       setCorpusData]       = useState([]);
+  var [fdData,           setFdData]           = useState([]);
+  var [acctSettings,     setAcctSettings]     = useState({});
   var [selMonth, setSelMonth] = useState("2026-05");
   var [selFlat, setSelFlat] = useState(null);
   var [filter, setFilter] = useState("all");
@@ -139,23 +141,39 @@ export default function App() {
   var [noticePanel, setNoticePanel] = useState(null);
   var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:""});
 
+  // loadMonthData: fetch bills only for the selected month (30 rows max)
+  var loadMonthData = useCallback(async function(month) {
+    var result = await supabase
+      .from("flat_month_status")
+      .select("*")
+      .eq("billing_month", month);
+    if (result.data) setMonthBillsData(result.data);
+  }, []);
+
   var loadData = useCallback(async function() {
     setDataLoading(true);
     try {
       var results = await Promise.all([
+        // Flats: 30 rows max — always safe
         supabase.from("flats").select("*").order("block").order("flat_no"),
-        supabase.from("bills").select("*"),
-        supabase.from("payments").select("*"),
-        supabase.from("expenses").select("*").order("expense_date",{ascending:false}),
+        // Monthly summaries: 48 rows (one per month) — always safe
+        supabase.from("monthly_summary").select("*").order("billing_month", {ascending:false}),
+        // Overdue: only overdue bills — max 50-100 rows ever
+        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
+        // Expenses: paginate to latest 500
+        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+        // Notices, corpus, FD, other income — all small tables
         supabase.from("notices").select("*").order("posted_at",{ascending:false}),
         supabase.from("other_income").select("*").order("received_date",{ascending:false}),
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
         supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
         supabase.from("account_settings").select("*"),
+        // Payments summary by month (for income tab)
+        supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500),
       ]);
       if (results[0].data) setFlats(results[0].data);
-      if (results[1].data) setAllBills(results[1].data);
-      if (results[2].data) setAllPayments(results[2].data);
+      if (results[1].data) setMonthlySummaries(results[1].data);
+      if (results[2].data) setOverdueBills(results[2].data);
       if (results[3].data) setAllExpenses(results[3].data);
       if (results[4].data) setNotices(results[4].data);
       if (results[5].data) setOtherIncome(results[5].data);
@@ -166,6 +184,7 @@ export default function App() {
         results[8].data.forEach(function(row) { settings[row.key] = row.value; });
         setAcctSettings(settings);
       }
+      if (results[9].data) setAllPayments(results[9].data);
     } catch(e) { console.error("loadData error:", e); }
     setDataLoading(false);
   }, []);
@@ -184,6 +203,7 @@ export default function App() {
         setSession(parsed);
         setUserProfile(parsed.profile);
         setAppLoading(false);
+        loadData(); // ← call directly, don't rely on the [session] effect
         return;
       } catch(e) { localStorage.removeItem("pallazo_temp_session"); }
     }
@@ -199,11 +219,18 @@ export default function App() {
       else { setAppLoading(false); setUserProfile(null); }
     });
     return function() { sub.data.subscription.unsubscribe(); };
-  }, []);
+  }, [loadData]);
 
   useEffect(function() {
-    if (session) loadData();
+    // Only trigger for real Supabase sessions (not temp PIN sessions)
+    // Temp sessions call loadData() directly above
+    if (session && !session.temp) loadData();
   }, [session, loadData]);
+
+  // When selMonth changes, load that month's flat bills (30 rows)
+  useEffect(function() {
+    if (session && flats.length > 0) loadMonthData(selMonth);
+  }, [selMonth, session, flats.length, loadMonthData]);
 
   function showToast(msg) { setToast(msg); setTimeout(function(){ setToast(null); }, 2800); }
 
@@ -227,6 +254,7 @@ export default function App() {
     if (result.error) { showToast("❌ " + result.error.message); return; }
     await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",flat.id).eq("billing_month",selMonth);
     await loadData();
+    await loadMonthData(selMonth);
     setPayModal(false);
     setPayForm({amount:"",mode:"Cash",ref:""});
     showToast("✅ Payment saved!");
@@ -241,46 +269,47 @@ export default function App() {
   }}/>;
   if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots/>;
 
-  // Computed values — safe because data is loaded
-  var monthBills = allBills.filter(function(b) { return b.billing_month === selMonth; });
-  var monthExp   = allExpenses.filter(function(e) { return e.billing_month === selMonth; });
+  // ── Monthly summary from view (never hits row limits) ─────────
+  var mSummary = monthlySummaries.find(function(s){ return s.billing_month === selMonth; }) || {};
+  var collected  = mSummary.collected  || 0;
+  var totalDues  = mSummary.dues       || 0;
+  var expected   = mSummary.expected   || flats.reduce(function(s,f){return s+f.monthly_charge;},0);
+  var paidCnt    = mSummary.paid_count   || 0;
+  var overdCnt   = mSummary.overdue_count || 0;
+  var partCnt    = 0;
+  var collPct    = expected > 0 ? Math.round((collected/expected)*100) : 0;
 
-  function getBillForFlat(flatId) { return getBill(allBills, flatId, selMonth); }
-  function getStatusForFlat(flatId) { return getStatus(getBillForFlat(flatId)); }
-
-  var overdueByFlat = {};
-  allBills.forEach(function(b) {
-    if (b.status === "overdue" && (b.arrears || 0) > 0) {
-      if (!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
-      overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
-    }
-  });
-
-  var totalOverdueAmt = 0;
-  Object.values(overdueByFlat).forEach(function(months) {
-    months.forEach(function(m) { totalOverdueAmt += (m.amount || 0); });
-  });
-
-  var overdueByYear = {};
-  Object.keys(overdueByFlat).forEach(function(flat) {
-    overdueByFlat[flat].forEach(function(item) {
-      var yr = item.month.slice(0,4);
-      if (!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
-      overdueByYear[yr].total += item.amount;
-      if (!overdueByYear[yr].flats[flat]) overdueByYear[yr].flats[flat] = 0;
-      overdueByYear[yr].flats[flat] += item.amount;
-    });
-  });
-
-  var collected  = monthBills.filter(function(b){return b.status==="paid";}).reduce(function(s,b){return s+b.total_amount;},0);
-  var totalDues  = monthBills.filter(function(b){return b.status==="overdue";}).reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
-  var expected   = monthBills.reduce(function(s,b){return s+b.total_amount;},0) || flats.reduce(function(s,f){return s+f.monthly_charge;},0);
-  var paidCnt    = monthBills.filter(function(b){return b.status==="paid";}).length;
-  var overdCnt   = monthBills.filter(function(b){return b.status==="overdue";}).length;
-  var partCnt    = monthBills.filter(function(b){return b.status==="partial";}).length;
+  // ── Month bills: 30 rows from flat_month_status view ─────────
+  var monthBills = monthBillsData; // already filtered by selMonth in DB query
+  var monthExp   = allExpenses.filter(function(e){ return e.billing_month === selMonth; });
   var monthlyExp = monthExp.reduce(function(s,e){return s+e.amount;},0);
   var totalExp   = allExpenses.reduce(function(s,e){return s+e.amount;},0);
-  var collPct    = expected > 0 ? Math.round((collected/expected)*100) : 0;
+
+  function getBillForFlat(flatId) {
+    return monthBills.find(function(b){ return b.flat_id === flatId; }) || null;
+  }
+  function getStatusForFlat(flatId) {
+    var b = getBillForFlat(flatId);
+    return b ? b.status : "overdue";
+  }
+
+  // ── Overdue: from overdue_summary view (only overdue rows) ────
+  var overdueByFlat = {};
+  overdueBills.forEach(function(b) {
+    if (!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
+    overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
+  });
+
+  var totalOverdueAmt = overdueBills.reduce(function(s,b){ return s+(b.arrears||0); }, 0);
+
+  var overdueByYear = {};
+  overdueBills.forEach(function(b) {
+    var yr = b.billing_month.slice(0,4);
+    if (!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
+    overdueByYear[yr].total += (b.arrears||0);
+    if (!overdueByYear[yr].flats[b.flat_id]) overdueByYear[yr].flats[b.flat_id] = 0;
+    overdueByYear[yr].flats[b.flat_id] += (b.arrears||0);
+  });
 
   var filteredFlats = flats.filter(function(f) {
     var st = getStatusForFlat(f.id);
@@ -299,8 +328,9 @@ export default function App() {
   var totalIncome = parseFloat(acctSettings.opening_balance||0) + totalMaint + totalCorpus + totalOtherInc + fdMatured;
 
   var sharedProps = {
-    flats, allBills, allPayments, allExpenses, notices, showToast, setTab,
-    userProfile, selMonth, setSelMonth, getBillForFlat, getStatusForFlat,
+    flats, monthlySummaries, monthBillsData, overdueBills, allPayments, allExpenses,
+    notices, showToast, setTab, userProfile, selMonth, setSelMonth,
+    getBillForFlat, getStatusForFlat,
     monthBills, monthExp, collected, totalDues, expected, paidCnt, overdCnt, partCnt,
     monthlyExp, totalExp, collPct, overdueByFlat, overdueByYear, totalOverdueAmt,
     otherIncome, corpusData, fdData, acctSettings,
@@ -547,12 +577,15 @@ function FlatsTab(props) {
           {props.filteredFlats.map(function(f) {
             var st = props.getStatusForFlat(f.id);
             var bill = props.getBillForFlat(f.id);
+            var displaySt = (st === "no-data") ? "paid" : st; // no bill = treat as paid for display
             return (
               <div key={f.id} className="flat-item" onClick={function(){props.setSelFlat(f);}}>
-                <div className="fi-left"><div className={"fi-avatar "+st}>{f.flat_no}</div><div><div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div><div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner":"Rented"}</div></div></div>
+                <div className="fi-left"><div className={"fi-avatar "+displaySt}>{f.flat_no}</div><div><div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div><div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner Occupied":"Rented"}</div></div></div>
                 <div className="fi-right">
-                  {st==="paid" ? <div className="fi-amount paid">{fmtRupee(f.monthly_charge)}</div> : <div className={"fi-amount "+st}>{fmtRupee(bill&&bill.arrears?bill.arrears:f.monthly_charge)}</div>}
-                  <div className={"chip "+st}>{st==="paid"?"Paid":"Overdue"}</div>
+                  {displaySt==="paid"
+                    ? <div className="fi-amount paid">{fmtRupee(bill?bill.total_amount:f.monthly_charge)}</div>
+                    : <div className={"fi-amount "+displaySt}>{fmtRupee(bill&&bill.arrears?bill.arrears:f.monthly_charge)}</div>}
+                  <div className={"chip "+displaySt}>{displaySt==="paid"?"Paid":"Overdue"}</div>
                 </div>
               </div>
             );
