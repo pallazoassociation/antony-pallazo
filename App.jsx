@@ -121,15 +121,17 @@ export default function App() {
   var [appLoading, setAppLoading] = useState(true);
   var [dataLoading, setDataLoading] = useState(false);
   var [tab, setTab] = useState("home");
-  var [flats, setFlats] = useState([]);
-  var [allBills, setAllBills] = useState([]);
-  var [allPayments, setAllPayments] = useState([]);
-  var [allExpenses, setAllExpenses] = useState([]);
-  var [notices, setNotices] = useState([]);
-  var [otherIncome, setOtherIncome] = useState([]);
-  var [corpusData, setCorpusData] = useState([]);
-  var [fdData, setFdData] = useState([]);
-  var [acctSettings, setAcctSettings] = useState({});
+  var [flats,            setFlats]            = useState([]);
+  var [monthlySummaries, setMonthlySummaries] = useState([]);
+  var [monthBillsData,   setMonthBillsData]   = useState([]);
+  var [overdueBills,     setOverdueBills]     = useState([]);
+  var [allPayments,      setAllPayments]      = useState([]);
+  var [allExpenses,      setAllExpenses]      = useState([]);
+  var [notices,          setNotices]          = useState([]);
+  var [otherIncome,      setOtherIncome]      = useState([]);
+  var [corpusData,       setCorpusData]       = useState([]);
+  var [fdData,           setFdData]           = useState([]);
+  var [acctSettings,     setAcctSettings]     = useState({});
   var [selMonth, setSelMonth] = useState("2026-05");
   var [selFlat, setSelFlat] = useState(null);
   var [filter, setFilter] = useState("all");
@@ -139,23 +141,39 @@ export default function App() {
   var [noticePanel, setNoticePanel] = useState(null);
   var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:""});
 
+  // loadMonthData: fetch bills only for the selected month (30 rows max)
+  var loadMonthData = useCallback(async function(month) {
+    var result = await supabase
+      .from("flat_month_status")
+      .select("*")
+      .eq("billing_month", month);
+    if (result.data) setMonthBillsData(result.data);
+  }, []);
+
   var loadData = useCallback(async function() {
     setDataLoading(true);
     try {
       var results = await Promise.all([
+        // Flats: 30 rows max — always safe
         supabase.from("flats").select("*").order("block").order("flat_no"),
-        supabase.from("bills").select("*"),
-        supabase.from("payments").select("*"),
-        supabase.from("expenses").select("*").order("expense_date",{ascending:false}),
+        // Monthly summaries: 48 rows (one per month) — always safe
+        supabase.from("monthly_summary").select("*").order("billing_month", {ascending:false}),
+        // Overdue: only overdue bills — max 50-100 rows ever
+        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
+        // Expenses: paginate to latest 500
+        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+        // Notices, corpus, FD, other income — all small tables
         supabase.from("notices").select("*").order("posted_at",{ascending:false}),
         supabase.from("other_income").select("*").order("received_date",{ascending:false}),
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
         supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
         supabase.from("account_settings").select("*"),
+        // Payments summary by month (for income tab)
+        supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500),
       ]);
       if (results[0].data) setFlats(results[0].data);
-      if (results[1].data) setAllBills(results[1].data);
-      if (results[2].data) setAllPayments(results[2].data);
+      if (results[1].data) setMonthlySummaries(results[1].data);
+      if (results[2].data) setOverdueBills(results[2].data);
       if (results[3].data) setAllExpenses(results[3].data);
       if (results[4].data) setNotices(results[4].data);
       if (results[5].data) setOtherIncome(results[5].data);
@@ -166,6 +184,7 @@ export default function App() {
         results[8].data.forEach(function(row) { settings[row.key] = row.value; });
         setAcctSettings(settings);
       }
+      if (results[9].data) setAllPayments(results[9].data);
     } catch(e) { console.error("loadData error:", e); }
     setDataLoading(false);
   }, []);
@@ -208,6 +227,11 @@ export default function App() {
     if (session && !session.temp) loadData();
   }, [session, loadData]);
 
+  // When selMonth changes, load that month's flat bills (30 rows)
+  useEffect(function() {
+    if (session && flats.length > 0) loadMonthData(selMonth);
+  }, [selMonth, session, flats.length, loadMonthData]);
+
   function showToast(msg) { setToast(msg); setTimeout(function(){ setToast(null); }, 2800); }
 
   async function handleLogout() {
@@ -230,6 +254,7 @@ export default function App() {
     if (result.error) { showToast("❌ " + result.error.message); return; }
     await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",flat.id).eq("billing_month",selMonth);
     await loadData();
+    await loadMonthData(selMonth);
     setPayModal(false);
     setPayForm({amount:"",mode:"Cash",ref:""});
     showToast("✅ Payment saved!");
@@ -244,46 +269,47 @@ export default function App() {
   }}/>;
   if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots/>;
 
-  // Computed values — safe because data is loaded
-  var monthBills = allBills.filter(function(b) { return b.billing_month === selMonth; });
-  var monthExp   = allExpenses.filter(function(e) { return e.billing_month === selMonth; });
+  // ── Monthly summary from view (never hits row limits) ─────────
+  var mSummary = monthlySummaries.find(function(s){ return s.billing_month === selMonth; }) || {};
+  var collected  = mSummary.collected  || 0;
+  var totalDues  = mSummary.dues       || 0;
+  var expected   = mSummary.expected   || flats.reduce(function(s,f){return s+f.monthly_charge;},0);
+  var paidCnt    = mSummary.paid_count   || 0;
+  var overdCnt   = mSummary.overdue_count || 0;
+  var partCnt    = 0;
+  var collPct    = expected > 0 ? Math.round((collected/expected)*100) : 0;
 
-  function getBillForFlat(flatId) { return getBill(allBills, flatId, selMonth); }
-  function getStatusForFlat(flatId) { return getStatus(getBillForFlat(flatId)); }
-
-  var overdueByFlat = {};
-  allBills.forEach(function(b) {
-    if (b.status === "overdue" && (b.arrears || 0) > 0) {
-      if (!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
-      overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
-    }
-  });
-
-  var totalOverdueAmt = 0;
-  Object.values(overdueByFlat).forEach(function(months) {
-    months.forEach(function(m) { totalOverdueAmt += (m.amount || 0); });
-  });
-
-  var overdueByYear = {};
-  Object.keys(overdueByFlat).forEach(function(flat) {
-    overdueByFlat[flat].forEach(function(item) {
-      var yr = item.month.slice(0,4);
-      if (!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
-      overdueByYear[yr].total += item.amount;
-      if (!overdueByYear[yr].flats[flat]) overdueByYear[yr].flats[flat] = 0;
-      overdueByYear[yr].flats[flat] += item.amount;
-    });
-  });
-
-  var collected  = monthBills.filter(function(b){return b.status==="paid";}).reduce(function(s,b){return s+b.total_amount;},0);
-  var totalDues  = monthBills.filter(function(b){return b.status==="overdue";}).reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
-  var expected   = monthBills.reduce(function(s,b){return s+b.total_amount;},0) || flats.reduce(function(s,f){return s+f.monthly_charge;},0);
-  var paidCnt    = monthBills.filter(function(b){return b.status==="paid";}).length;
-  var overdCnt   = monthBills.filter(function(b){return b.status==="overdue";}).length;
-  var partCnt    = monthBills.filter(function(b){return b.status==="partial";}).length;
+  // ── Month bills: 30 rows from flat_month_status view ─────────
+  var monthBills = monthBillsData; // already filtered by selMonth in DB query
+  var monthExp   = allExpenses.filter(function(e){ return e.billing_month === selMonth; });
   var monthlyExp = monthExp.reduce(function(s,e){return s+e.amount;},0);
   var totalExp   = allExpenses.reduce(function(s,e){return s+e.amount;},0);
-  var collPct    = expected > 0 ? Math.round((collected/expected)*100) : 0;
+
+  function getBillForFlat(flatId) {
+    return monthBills.find(function(b){ return b.flat_id === flatId; }) || null;
+  }
+  function getStatusForFlat(flatId) {
+    var b = getBillForFlat(flatId);
+    return b ? b.status : "overdue";
+  }
+
+  // ── Overdue: from overdue_summary view (only overdue rows) ────
+  var overdueByFlat = {};
+  overdueBills.forEach(function(b) {
+    if (!overdueByFlat[b.flat_id]) overdueByFlat[b.flat_id] = [];
+    overdueByFlat[b.flat_id].push({ month: b.billing_month, amount: b.arrears });
+  });
+
+  var totalOverdueAmt = overdueBills.reduce(function(s,b){ return s+(b.arrears||0); }, 0);
+
+  var overdueByYear = {};
+  overdueBills.forEach(function(b) {
+    var yr = b.billing_month.slice(0,4);
+    if (!overdueByYear[yr]) overdueByYear[yr] = { total:0, flats:{} };
+    overdueByYear[yr].total += (b.arrears||0);
+    if (!overdueByYear[yr].flats[b.flat_id]) overdueByYear[yr].flats[b.flat_id] = 0;
+    overdueByYear[yr].flats[b.flat_id] += (b.arrears||0);
+  });
 
   var filteredFlats = flats.filter(function(f) {
     var st = getStatusForFlat(f.id);
@@ -302,8 +328,9 @@ export default function App() {
   var totalIncome = parseFloat(acctSettings.opening_balance||0) + totalMaint + totalCorpus + totalOtherInc + fdMatured;
 
   var sharedProps = {
-    flats, allBills, allPayments, allExpenses, notices, showToast, setTab,
-    userProfile, selMonth, setSelMonth, getBillForFlat, getStatusForFlat,
+    flats, monthlySummaries, monthBillsData, overdueBills, allPayments, allExpenses,
+    notices, showToast, setTab, userProfile, selMonth, setSelMonth,
+    getBillForFlat, getStatusForFlat,
     monthBills, monthExp, collected, totalDues, expected, paidCnt, overdCnt, partCnt,
     monthlyExp, totalExp, collPct, overdueByFlat, overdueByYear, totalOverdueAmt,
     otherIncome, corpusData, fdData, acctSettings,
@@ -332,8 +359,8 @@ export default function App() {
         {tab==="home"     && <HomeTab     {...sharedProps}/>}
         {tab==="flats"    && <FlatsTab    {...sharedProps}/>}
         {tab==="overdue"  && <OverdueTab  {...sharedProps}/>}
-        {tab==="income"   && <IncomeTab   {...sharedProps}/>}
-        {tab==="expenses" && <ExpensesTab {...sharedProps}/>}
+        {tab==="income"   && <IncomeTab   {...sharedProps} reload={loadData}/>}
+        {tab==="expenses" && <ExpensesTab {...sharedProps} reload={loadData}/>}
       </div>
 
       <nav className="tabbar">
@@ -678,9 +705,50 @@ function OverdueTab(props) {
 }
 
 function IncomeTab(props) {
-  var [sec, setSec] = useState("other");
+  var [sec, setSec]           = useState("other");
+  var [showForm, setShowForm] = useState(false);
+  var [editing, setEditing]   = useState(null);
+  var [saving, setSaving]     = useState(false);
+  var [formType, setFormType] = useState("other"); // other | corpus | fd
+  var [form, setForm]         = useState({});
+
   var totalFdMat = props.fdData.filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0);
   var totalFdInv = props.fdData.reduce(function(s,f){return s+(f.invested_amount||0);},0);
+
+  function openAdd(type) { setFormType(type); setEditing(null); setForm({}); setShowForm(true); }
+  function openEdit(type, item) { setFormType(type); setEditing(item); setForm({...item}); setShowForm(true); }
+
+  async function saveForm() {
+    setSaving(true);
+    var result;
+    if (formType === "other") {
+      if (!form.source || !form.amount) { props.showToast("⚠️ Fill source and amount"); setSaving(false); return; }
+      var data = { source: form.source, amount: parseFloat(form.amount), received_date: form.received_date || null };
+      result = editing ? await supabase.from("other_income").update(data).eq("id", editing.id) : await supabase.from("other_income").insert(data);
+    } else if (formType === "corpus") {
+      if (!form.flat_id || !form.amount) { props.showToast("⚠️ Fill flat and amount"); setSaving(false); return; }
+      var data = { flat_id: form.flat_id, amount: parseFloat(form.amount), paid_date: form.paid_date || null, mode: form.mode || "Bank Transfer" };
+      result = editing ? await supabase.from("corpus_payments").update(data).eq("id", editing.id) : await supabase.from("corpus_payments").insert(data);
+    } else if (formType === "fd") {
+      if (!form.account_no || !form.invested_amount) { props.showToast("⚠️ Fill account no and amount"); setSaving(false); return; }
+      var data = { account_no: form.account_no, invested_amount: parseFloat(form.invested_amount), invested_date: form.invested_date || null, matured_amount: form.matured_amount ? parseFloat(form.matured_amount) : null, matured_date: form.matured_date || null, status: form.matured_amount ? "matured" : "active" };
+      result = editing ? await supabase.from("fixed_deposits").update(data).eq("id", editing.id) : await supabase.from("fixed_deposits").insert(data);
+    }
+    setSaving(false);
+    if (result && result.error) { props.showToast("❌ " + result.error.message); return; }
+    props.showToast(editing ? "✅ Updated!" : "✅ Added!");
+    setShowForm(false);
+    await props.reload();
+  }
+
+  async function deleteItem(table, id) {
+    if (!window.confirm("Delete this record? This cannot be undone.")) return;
+    await supabase.from(table).delete().eq("id", id);
+    props.showToast("🗑 Deleted");
+    await props.reload();
+  }
+
+  var ALL_FLATS_LIST = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
   return (
     <>
@@ -699,16 +767,27 @@ function IncomeTab(props) {
         })}
       </div>
 
+      {/* ── Other Income ── */}
       {sec==="other" && (
         <div style={{padding:"10px 16px 24px"}}>
+          <div className="row-between mb14" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).length} records</div>
+            <button className="add-btn" onClick={function(){openAdd("other");}}>＋ Add Income</button>
+          </div>
           <div className="card">
             {props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).map(function(item,i){
               var icon = item.source&&(item.source.toLowerCase().includes("fd")||item.source.toLowerCase().includes("fixed"))?"🏦":item.source&&item.source.toLowerCase().includes("interest")?"📈":"💵";
               return (
                 <div key={item.id||i} className="income-item">
                   <div className="income-icon" style={{background:"#1A2A3A"}}>{icon}</div>
-                  <div className="income-info"><div className="income-src">{item.source}</div><div className="income-date">{item.received_date||"Date not available"}</div></div>
-                  <div className="income-amt">{fmtRupee(item.amount)}</div>
+                  <div className="income-info"><div className="income-src">{item.source}</div><div className="income-date">{item.received_date||"Date not recorded"}</div></div>
+                  <div style={{textAlign:"right"}}>
+                    <div className="income-amt">{fmtRupee(item.amount)}</div>
+                    <div style={{display:"flex",gap:4,marginTop:4}}>
+                      <button onClick={function(){openEdit("other",item);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
+                      <button onClick={function(){deleteItem("other_income",item.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                    </div>
+                  </div>
                 </div>
               );
             })}
@@ -716,6 +795,7 @@ function IncomeTab(props) {
         </div>
       )}
 
+      {/* ── Corpus Fund ── */}
       {sec==="corpus" && (
         <div style={{padding:"10px 16px 24px"}}>
           <div style={{background:"linear-gradient(135deg,#B8860B,#D4A853)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
@@ -723,26 +803,52 @@ function IncomeTab(props) {
             <div style={{color:"#FFF",fontSize:26,fontWeight:700,fontFamily:"'Playfair Display',serif",marginTop:4}}>{fmtRupee(props.totalCorpus)}</div>
             <div style={{color:"rgba(255,255,255,.7)",fontSize:12,marginTop:4}}>{props.corpusData.length} of 30 flats paid</div>
           </div>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.corpusData.length} entries</div>
+            <button className="add-btn" onClick={function(){openAdd("corpus");}}>＋ Add Entry</button>
+          </div>
           <div className="card">
             {props.corpusData.map(function(c,i){
-              return <div key={c.id||i} className="corpus-item"><div><div className="corpus-flat">Flat {c.flat_id}</div><div className="corpus-date">{c.paid_date||"—"} · {c.mode}</div></div><div className="corpus-amt">{fmtRupee(c.amount)}</div></div>;
+              return (
+                <div key={c.id||i} className="corpus-item">
+                  <div><div className="corpus-flat">Flat {c.flat_id}</div><div className="corpus-date">{c.paid_date||"—"} · {c.mode||"—"}</div></div>
+                  <div style={{textAlign:"right"}}>
+                    <div className="corpus-amt">{fmtRupee(c.amount)}</div>
+                    <div style={{display:"flex",gap:4,marginTop:4}}>
+                      <button onClick={function(){openEdit("corpus",c);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
+                      <button onClick={function(){deleteItem("corpus_payments",c.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                    </div>
+                  </div>
+                </div>
+              );
             })}
           </div>
         </div>
       )}
 
+      {/* ── Fixed Deposits ── */}
       {sec==="fd" && (
         <div style={{padding:"10px 16px 24px"}}>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.fdData.length} FD account{props.fdData.length!==1?"s":""}</div>
+            <button className="add-btn" onClick={function(){openAdd("fd");}}>＋ Add FD</button>
+          </div>
           {props.fdData.map(function(fd,i){
             return (
-              <div key={fd.id||i} className="fd-card" style={{marginTop:i>0?12:0}}>
-                <div className="fd-header">
-                  <div className="fd-acc">A/c: {fd.account_no}</div>
-                  <div className="fd-amt">{fmtRupee(fd.invested_amount)}</div>
-                  <div className={"fd-status "+(fd.status==="matured"?"fd-matured":"fd-active")}>{fd.status==="matured"?"✓ Matured":"⏳ Active"}</div>
+              <div key={fd.id||i} className="fd-card" style={{marginBottom:12}}>
+                <div className="fd-header" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div className="fd-acc">A/c: {fd.account_no}</div>
+                    <div className="fd-amt">{fmtRupee(fd.invested_amount)}</div>
+                    <div className={"fd-status "+(fd.status==="matured"?"fd-matured":"fd-active")}>{fd.status==="matured"?"✓ Matured":"⏳ Active"}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6,marginTop:4}}>
+                    <button onClick={function(){openEdit("fd",fd);}} style={{border:"none",background:"rgba(255,255,255,.15)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#FFF"}}>✏️ Edit</button>
+                    <button onClick={function(){deleteItem("fixed_deposits",fd.id);}} style={{border:"none",background:"rgba(255,255,255,.15)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#FFC0C0"}}>🗑</button>
+                  </div>
                 </div>
                 <div>
-                  {[["Invested",fmtRupee(fd.invested_amount)],["Invested Date",fd.invested_date],["Matured",fd.matured_amount?fmtRupee(fd.matured_amount):"Not yet matured"],["Maturity Date",fd.matured_date||"—"],fd.matured_amount&&["Interest Earned",fmtRupee(fd.matured_amount-fd.invested_amount)]].filter(Boolean).map(function(row){
+                  {[["Invested",fmtRupee(fd.invested_amount)],["Invested Date",fd.invested_date||"—"],["Matured Amount",fd.matured_amount?fmtRupee(fd.matured_amount):"Not yet matured"],["Maturity Date",fd.matured_date||"—"],fd.matured_amount&&["Interest Earned",fmtRupee(fd.matured_amount-fd.invested_amount)]].filter(Boolean).map(function(row){
                     return <div key={row[0]} className="info-row"><span className="ir-label">{row[0]}</span><span className="ir-value">{row[1]}</span></div>;
                   })}
                 </div>
@@ -751,16 +857,109 @@ function IncomeTab(props) {
           })}
         </div>
       )}
+
+      {/* ── Add/Edit Sheet ── */}
+      {showForm && (
+        <div className="overlay" onClick={function(){setShowForm(false);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div>
+                <div className="sheet-title">{editing?"Edit":"Add"} {formType==="other"?"Income":formType==="corpus"?"Corpus Entry":"Fixed Deposit"}</div>
+                <div className="sheet-sub">* required fields</div>
+              </div>
+              <button className="close-btn" onClick={function(){setShowForm(false);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              {formType==="other" && <>
+                <div className="form-group"><label className="form-label">Source *</label><input className="form-input" placeholder="e.g. Bank Interest, Gym Rent" value={form.source||""} onChange={function(e){setForm(function(p){return{...p,source:e.target.value};});}}/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" placeholder="0" value={form.amount||""} onChange={function(e){setForm(function(p){return{...p,amount:e.target.value};});}}/></div>
+                  <div className="form-group"><label className="form-label">Date Received</label><input className="form-input" type="date" value={form.received_date||""} onChange={function(e){setForm(function(p){return{...p,received_date:e.target.value};});}}/></div>
+                </div>
+              </>}
+
+              {formType==="corpus" && <>
+                <div className="form-group"><label className="form-label">Flat *</label>
+                  <select className="form-input" value={form.flat_id||""} onChange={function(e){setForm(function(p){return{...p,flat_id:e.target.value};});}}>
+                    <option value="">Select Flat</option>
+                    {ALL_FLATS_LIST.map(function(f){return <option key={f} value={f}>{f}</option>;})}
+                  </select>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" placeholder="5000" value={form.amount||""} onChange={function(e){setForm(function(p){return{...p,amount:e.target.value};});}}/></div>
+                  <div className="form-group"><label className="form-label">Date Paid</label><input className="form-input" type="date" value={form.paid_date||""} onChange={function(e){setForm(function(p){return{...p,paid_date:e.target.value};});}}/></div>
+                </div>
+                <div className="form-group"><label className="form-label">Mode</label>
+                  <select className="form-input" value={form.mode||"Bank Transfer"} onChange={function(e){setForm(function(p){return{...p,mode:e.target.value};});}}>
+                    {["Cash","UPI","NEFT","IMPS","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                  </select>
+                </div>
+              </>}
+
+              {formType==="fd" && <>
+                <div className="form-group"><label className="form-label">Account Number *</label><input className="form-input" placeholder="e.g. 270213007407" value={form.account_no||""} onChange={function(e){setForm(function(p){return{...p,account_no:e.target.value};});}}/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Invested Amount *</label><input className="form-input" type="number" placeholder="0" value={form.invested_amount||""} onChange={function(e){setForm(function(p){return{...p,invested_amount:e.target.value};});}}/></div>
+                  <div className="form-group"><label className="form-label">Invested Date</label><input className="form-input" type="date" value={form.invested_date||""} onChange={function(e){setForm(function(p){return{...p,invested_date:e.target.value};});}}/></div>
+                </div>
+                <div style={{padding:"10px 0 6px",fontSize:12,fontWeight:600,color:"var(--muted)",letterSpacing:".5px",textTransform:"uppercase"}}>Maturity details (fill when FD matures)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Matured Amount</label><input className="form-input" type="number" placeholder="Leave blank if active" value={form.matured_amount||""} onChange={function(e){setForm(function(p){return{...p,matured_amount:e.target.value};});}}/></div>
+                  <div className="form-group"><label className="form-label">Maturity Date</label><input className="form-input" type="date" value={form.matured_date||""} onChange={function(e){setForm(function(p){return{...p,matured_date:e.target.value};});}}/></div>
+                </div>
+              </>}
+
+              <button className="btn btn-success" onClick={saveForm} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update":"✅ Save")}</button>
+              <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
 function ExpensesTab(props) {
-  var [viewAll, setViewAll] = useState(false);
+  var [viewAll, setViewAll]   = useState(false);
+  var [showForm, setShowForm] = useState(false);
+  var [editing, setEditing]   = useState(null);
+  var [saving, setSaving]     = useState(false);
+  var [deleting, setDeleting] = useState(null);
+  var CATS = ["Salary","Electricity","Sewage","Repairs","Cleaning","Maintenance","Staff Welfare","Admin","Other"];
+  var emptyForm = {vendor:"",category:"Salary",amount:"",expense_date:"",billing_month:props.selMonth,invoice_no:""};
+  var [form, setForm]         = useState(emptyForm);
+
   var displayed = viewAll ? props.allExpenses : props.monthExp;
   var total = displayed.reduce(function(s,e){return s+e.amount;},0);
   var bycat = {};
   displayed.forEach(function(e){ bycat[e.category]=(bycat[e.category]||0)+e.amount; });
+
+  function openAdd() { setForm({...emptyForm, billing_month:props.selMonth}); setEditing(null); setShowForm(true); }
+  function openEdit(e) { setForm({vendor:e.vendor||"",category:e.category||"Other",amount:String(e.amount||""),expense_date:e.expense_date||"",billing_month:e.billing_month||props.selMonth,invoice_no:e.invoice_no||""}); setEditing(e); setShowForm(true); }
+
+  async function saveExpense() {
+    if (!form.vendor || !form.amount || !form.expense_date) { props.showToast("⚠️ Fill vendor, amount and date"); return; }
+    setSaving(true);
+    var data = { vendor:form.vendor.trim(), category:form.category, amount:parseFloat(form.amount), expense_date:form.expense_date, billing_month:form.billing_month, invoice_no:form.invoice_no.trim()||null };
+    var result;
+    if (editing) result = await supabase.from("expenses").update(data).eq("id", editing.id);
+    else result = await supabase.from("expenses").insert(data);
+    setSaving(false);
+    if (result.error) { props.showToast("❌ "+result.error.message); return; }
+    props.showToast(editing ? "✅ Expense updated!" : "✅ Expense added!");
+    setShowForm(false);
+    await props.reload();
+  }
+
+  async function deleteExpense(e) {
+    if (!window.confirm("Delete this expense? This cannot be undone.")) return;
+    setDeleting(e.id);
+    await supabase.from("expenses").delete().eq("id", e.id);
+    setDeleting(null);
+    props.showToast("🗑 Expense deleted");
+    await props.reload();
+  }
 
   return (
     <>
@@ -778,26 +977,72 @@ function ExpensesTab(props) {
           </div>
         </div>
       </div>
+
       <div className="section row-between">
         <div className="sec-title" style={{marginBottom:0}}>{viewAll?"All Expenses ("+props.allExpenses.length+")":monthLabel(props.selMonth)+" ("+props.monthExp.length+")"}</div>
-        <button className="add-btn" style={{background:viewAll?"var(--muted)":"var(--gold)"}} onClick={function(){setViewAll(function(v){return !v;});}}>
-          {viewAll?"📅 Month View":"📋 All Time"}
-        </button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="add-btn" onClick={openAdd}>＋ Add</button>
+          <button className="add-btn" style={{background:viewAll?"var(--muted)":"var(--gold)"}} onClick={function(){setViewAll(function(v){return !v;});}}>
+            {viewAll?"📅 Month":"📋 All"}
+          </button>
+        </div>
       </div>
+
       <div className="px16 mb14 mt10">
         <div className="card">
-          {displayed.length===0 && <div className="empty"><div className="empty-icon">💳</div><div>No expenses for this month</div></div>}
+          {displayed.length===0 && <div className="empty"><div className="empty-icon">💳</div><div>No expenses for this {viewAll?"period":"month"}</div></div>}
           {displayed.map(function(e,i){
             return (
-              <div key={e.id||i} className="exp-item">
+              <div key={e.id||i} className="exp-item" style={{position:"relative"}}>
                 <div className="exp-icon">{catEmoji(e.category)}</div>
-                <div className="exp-info"><div className="exp-vendor">{e.vendor}</div><div className="exp-cat">{e.category}{e.billing_month?" · "+monthLabel(e.billing_month):""}</div></div>
-                <div className="exp-right"><div className="exp-amount">{fmtRupee(e.amount)}</div><div className="exp-date">{e.expense_date}</div></div>
+                <div className="exp-info"><div className="exp-vendor">{e.vendor}</div><div className="exp-cat">{e.category}{e.billing_month?" · "+monthLabel(e.billing_month):""}{e.invoice_no?" · "+e.invoice_no:""}</div></div>
+                <div className="exp-right" style={{textAlign:"right"}}>
+                  <div className="exp-amount">{fmtRupee(e.amount)}</div>
+                  <div className="exp-date">{e.expense_date}</div>
+                  <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                    <button onClick={function(){openEdit(e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️ Edit</button>
+                    <button onClick={function(){deleteExpense(e);}} disabled={deleting===e.id} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                  </div>
+                </div>
               </div>
             );
           })}
         </div>
       </div>
+
+      {showForm && (
+        <div className="overlay" onClick={function(){setShowForm(false);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div><div className="sheet-title">{editing?"Edit Expense":"Add Expense"}</div><div className="sheet-sub">All fields marked * are required</div></div>
+              <button className="close-btn" onClick={function(){setShowForm(false);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div className="form-group"><label className="form-label">Vendor / Description *</label><input className="form-input" placeholder="e.g. TNEB, CleanPro" value={form.vendor} onChange={function(e){setForm(function(p){return{...p,vendor:e.target.value};});}}/></div>
+              <div className="form-group"><label className="form-label">Category *</label>
+                <select className="form-input" value={form.category} onChange={function(e){setForm(function(p){return{...p,category:e.target.value};});}}>
+                  {CATS.map(function(c){return <option key={c}>{c}</option>;})}
+                </select>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" placeholder="0" value={form.amount} onChange={function(e){setForm(function(p){return{...p,amount:e.target.value};});}}/></div>
+                <div className="form-group"><label className="form-label">Date *</label><input className="form-input" type="date" value={form.expense_date} onChange={function(e){setForm(function(p){return{...p,expense_date:e.target.value};});}}/></div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div className="form-group"><label className="form-label">Billing Month</label>
+                  <select className="form-input" value={form.billing_month} onChange={function(e){setForm(function(p){return{...p,billing_month:e.target.value};});}}>
+                    {ALL_MONTHS.slice().reverse().map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+                  </select>
+                </div>
+                <div className="form-group"><label className="form-label">Invoice No</label><input className="form-input" placeholder="Optional" value={form.invoice_no} onChange={function(e){setForm(function(p){return{...p,invoice_no:e.target.value};});}}/></div>
+              </div>
+              <button className="btn btn-success" onClick={saveExpense} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update Expense":"✅ Save Expense")}</button>
+              <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
