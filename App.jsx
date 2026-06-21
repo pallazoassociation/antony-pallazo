@@ -15,13 +15,26 @@ function monthLabel(bm) {
   return names[m] + " " + y;
 }
 
-var ALL_MONTHS = [
-  "2022-06","2022-07","2022-08","2022-09","2022-10","2022-11","2022-12",
-  "2023-01","2023-02","2023-03","2023-04","2023-05","2023-06","2023-07","2023-08","2023-09","2023-10","2023-11","2023-12",
-  "2024-01","2024-02","2024-03","2024-04","2024-05","2024-06","2024-07","2024-08","2024-09","2024-10","2024-11","2024-12",
-  "2025-01","2025-02","2025-03","2025-04","2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12",
-  "2026-01","2026-02","2026-03","2026-04","2026-05"
-];
+// Dynamic month list — auto-includes current month and beyond
+function getCurrentMonth() {
+  var now = new Date();
+  return now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+}
+function buildMonthList() {
+  var start = "2022-06";
+  var cur = getCurrentMonth();
+  var months = [];
+  var y = 2022, m = 6;
+  while (true) {
+    var bm = y + "-" + String(m).padStart(2,"0");
+    months.push(bm);
+    if (bm >= cur) break;
+    m++; if (m > 12) { m = 1; y++; }
+    if (months.length > 120) break; // safety cap 10 years
+  }
+  return months;
+}
+var ALL_MONTHS = buildMonthList();
 
 var PINS = { admin: { pin:"2024", role:"admin", name:"Committee Admin" }, staff: { pin:"1234", role:"staff", name:"Staff User" } };
 
@@ -87,6 +100,11 @@ function LoginScreen(props) {
 }
 
 function LoadingScreen(props) {
+  var [secs, setSecs] = useState(0);
+  useEffect(function(){
+    var t = setInterval(function(){ setSecs(function(s){return s+1;}); },1000);
+    return function(){ clearInterval(t); };
+  },[]);
   return (
     <div className="loading-wrap">
       <div style={{fontSize:44}}>🏛</div>
@@ -96,6 +114,14 @@ function LoadingScreen(props) {
           {[0,1,2].map(function(i){return(
             <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#D4A853",animation:"pulse 1.2s ease-in-out "+i*0.2+"s infinite"}}/>
           );})}
+        </div>
+      )}
+      {secs >= 6 && props.retry && (
+        <div style={{marginTop:20,textAlign:"center"}}>
+          <div style={{color:"rgba(255,255,255,.3)",fontSize:12,marginBottom:8}}>Taking longer than usual…</div>
+          <button onClick={props.retry} style={{background:"var(--gold)",color:"#FFF",border:"none",borderRadius:10,padding:"10px 24px",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+            🔄 Retry
+          </button>
         </div>
       )}
     </div>
@@ -132,7 +158,8 @@ export default function App() {
   var [corpusData,       setCorpusData]       = useState([]);
   var [fdData,           setFdData]           = useState([]);
   var [acctSettings,     setAcctSettings]     = useState({});
-  var [selMonth, setSelMonth] = useState("2026-05");
+  var [liveBalance,      setLiveBalance]      = useState(null);
+  var [selMonth, setSelMonth] = useState(getCurrentMonth());
   var [selFlat, setSelFlat] = useState(null);
   var [filter, setFilter] = useState("all");
   var [search, setSearch] = useState("");
@@ -141,51 +168,81 @@ export default function App() {
   var [noticePanel, setNoticePanel] = useState(null);
   var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:""});
 
+  // Auto-generate bills for a new month when it doesn't exist yet
+  var autoGenBills = useCallback(async function(month, summary) {
+    if (summary) return; // bills already exist for this month
+    var FLAT_BHK = {
+      "A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK",
+      "B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK",
+      "C1":"2BHK","C2":"2BHK","C3":"2BHK","C4":"1BHK","C5":"2BHK","C6":"2BHK",
+      "D1D2":"3BHK","D3":"2BHK","D4":"1BHK","D5":"1BHK",
+      "E1":"2BHK","E2":"3BHK","E3":"1BHK","E4":"2BHK",
+      "F1":"2BHK","F2":"2BHK","F3":"2BHK","F4":"2BHK"
+    };
+    var CHARGES = {"3BHK":2000,"2BHK":1800,"1BHK":1600};
+    var y = parseInt(month.slice(0,4)), m = parseInt(month.slice(5,7));
+    var dueM = m===12?"01":String(m+1).padStart(2,"0");
+    var dueY = m===12?y+1:y;
+    var dueDate = dueY+"-"+dueM+"-10";
+    var rows = Object.entries(FLAT_BHK).map(function(e){
+      var charge = CHARGES[e[1]];
+      return {flat_id:e[0],billing_month:month,total_amount:charge,arrears:charge,due_date:dueDate,status:"overdue"};
+    });
+    await supabase.from("bills").upsert(rows, {onConflict:"flat_id,billing_month",ignoreDuplicates:true});
+    console.log("Auto-generated bills for "+month);
+  }, []);
+
   // loadMonthData: fetch bills only for the selected month (30 rows max)
   var loadMonthData = useCallback(async function(month) {
     var result = await supabase
       .from("flat_month_status")
       .select("*")
       .eq("billing_month", month);
-    if (result.data) setMonthBillsData(result.data);
-  }, []);
+    if (result.data && result.data.length > 0) {
+      setMonthBillsData(result.data);
+    } else {
+      // No bills for this month — auto-generate them
+      await autoGenBills(month, null);
+      var result2 = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
+      if (result2.data) setMonthBillsData(result2.data);
+      // Refresh summaries too
+      var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
+      if (s.data) setMonthlySummaries(s.data);
+    }
+  }, [autoGenBills]);
 
   var loadData = useCallback(async function() {
     setDataLoading(true);
     try {
       var results = await Promise.all([
-        // Flats: 30 rows max — always safe
         supabase.from("flats").select("*").order("block").order("flat_no"),
-        // Monthly summaries: 48 rows (one per month) — always safe
-        supabase.from("monthly_summary").select("*").order("billing_month", {ascending:false}),
-        // Overdue: only overdue bills — max 50-100 rows ever
+        supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
         supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
-        // Expenses: paginate to latest 500
         supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
-        // Notices, corpus, FD, other income — all small tables
         supabase.from("notices").select("*").order("posted_at",{ascending:false}),
         supabase.from("other_income").select("*").order("received_date",{ascending:false}),
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
         supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
         supabase.from("account_settings").select("*"),
-        // Payments summary by month (for income tab)
         supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500),
+        supabase.from("live_bank_balance").select("*").single(), // live calculated balance
       ]);
-      if (results[0].data) setFlats(results[0].data);
-      if (results[1].data) setMonthlySummaries(results[1].data);
-      if (results[2].data) setOverdueBills(results[2].data);
-      if (results[3].data) setAllExpenses(results[3].data);
-      if (results[4].data) setNotices(results[4].data);
-      if (results[5].data) setOtherIncome(results[5].data);
-      if (results[6].data) setCorpusData(results[6].data);
-      if (results[7].data) setFdData(results[7].data);
-      if (results[8].data) {
+      if (results[0].data)  setFlats(results[0].data);
+      if (results[1].data)  setMonthlySummaries(results[1].data);
+      if (results[2].data)  setOverdueBills(results[2].data);
+      if (results[3].data)  setAllExpenses(results[3].data);
+      if (results[4].data)  setNotices(results[4].data);
+      if (results[5].data)  setOtherIncome(results[5].data);
+      if (results[6].data)  setCorpusData(results[6].data);
+      if (results[7].data)  setFdData(results[7].data);
+      if (results[8].data)  {
         var settings = {};
-        results[8].data.forEach(function(row) { settings[row.key] = row.value; });
+        results[8].data.forEach(function(row){ settings[row.key]=row.value; });
         setAcctSettings(settings);
       }
-      if (results[9].data) setAllPayments(results[9].data);
-    } catch(e) { console.error("loadData error:", e); }
+      if (results[9].data)  setAllPayments(results[9].data);
+      if (results[10].data) setLiveBalance(results[10].data); // store live balance
+    } catch(e) { console.error("loadData error:",e); }
     setDataLoading(false);
   }, []);
 
@@ -223,7 +280,6 @@ export default function App() {
 
   useEffect(function() {
     // Only trigger for real Supabase sessions (not temp PIN sessions)
-    // Temp sessions call loadData() directly above
     if (session && !session.temp) loadData();
   }, [session, loadData]);
 
@@ -231,6 +287,18 @@ export default function App() {
   useEffect(function() {
     if (session && flats.length > 0) loadMonthData(selMonth);
   }, [selMonth, session, flats.length, loadMonthData]);
+
+  // Safety timeout — if data doesn't load in 8 seconds, retry once
+  useEffect(function() {
+    if (!session) return;
+    var timer = setTimeout(function() {
+      if (flats.length === 0 && !appLoading) {
+        console.log("Data load timeout — retrying...");
+        loadData();
+      }
+    }, 8000);
+    return function() { clearTimeout(timer); };
+  }, [session, flats.length, appLoading, loadData]);
 
   function showToast(msg) { setToast(msg); setTimeout(function(){ setToast(null); }, 2800); }
 
@@ -267,7 +335,7 @@ export default function App() {
     else loadUserProfile(s.user.id);
     setSession(s);
   }}/>;
-  if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots/>;
+  if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots retry={function(){ loadData(); }}/>;
 
   // ── Monthly summary from view (never hits row limits) ─────────
   var mSummary = monthlySummaries.find(function(s){ return s.billing_month === selMonth; }) || {};
@@ -318,14 +386,17 @@ export default function App() {
     return okF && okS;
   });
 
-  var bankBal = parseFloat(acctSettings.net_bank_balance || 0);
-  var activeFD = parseFloat(acctSettings.active_fd_amount || 0);
-  var totalMaint = parseFloat(acctSettings.total_maintenance || 0);
-  var totalCorpus = parseFloat(acctSettings.total_corpus || 0);
-  var totalOtherInc = parseFloat(acctSettings.total_other_income || 0);
-  var fdMatured = parseFloat(acctSettings.total_fd_matured || 0);
-  var totalExpAmt = parseFloat(acctSettings.total_expenses || 0);
-  var totalIncome = parseFloat(acctSettings.opening_balance||0) + totalMaint + totalCorpus + totalOtherInc + fdMatured;
+  // Use live calculated balance (updates instantly when payments/expenses added)
+  var lb = liveBalance || {};
+  var bankBal    = parseFloat(lb.net_bank_balance   || acctSettings.net_bank_balance   || 0);
+  var activeFD   = parseFloat(lb.active_fd_amount   || acctSettings.active_fd_amount   || 0);
+  var totalMaint = parseFloat(lb.total_maintenance  || acctSettings.total_maintenance  || 0);
+  var totalCorpus= parseFloat(lb.total_corpus       || acctSettings.total_corpus       || 0);
+  var totalOtherInc=parseFloat(lb.total_other_income|| acctSettings.total_other_income || 0);
+  var fdMatured  = parseFloat(lb.total_fd_matured   || acctSettings.total_fd_matured   || 0);
+  var totalExpAmt= parseFloat(lb.total_expenses     || acctSettings.total_expenses     || 0);
+  var openingBal = parseFloat(lb.opening_balance    || acctSettings.opening_balance    || 0);
+  var totalIncome= openingBal + totalMaint + totalCorpus + totalOtherInc + fdMatured;
 
   var sharedProps = {
     flats, monthlySummaries, monthBillsData, overdueBills, allPayments, allExpenses,
@@ -336,7 +407,8 @@ export default function App() {
     otherIncome, corpusData, fdData, acctSettings,
     bankBal, activeFD, totalMaint, totalCorpus, totalOtherInc, fdMatured,
     totalExpAmt, totalIncome, filteredFlats, filter, setFilter, search, setSearch,
-    selFlat: selFlat, setSelFlat: setSelFlat
+    selFlat: selFlat, setSelFlat: setSelFlat,
+    loadMonthData: loadMonthData, setMonthlySummaries: setMonthlySummaries
   };
 
   return (
@@ -407,8 +479,18 @@ export default function App() {
               )}
               <div className="btn-grid">
                 <button className="btn btn-primary" onClick={function(){setPayModal(true);}}>💸 Record Payment</button>
+                <button className="btn btn-success" onClick={async function(){
+                  var bill = getBillForFlat(selFlat.id);
+                  if (!bill) { showToast("⚠️ No bill found for "+monthLabel(selMonth)); return; }
+                  await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                  await supabase.from("payments").insert({flat_id:selFlat.id,billing_month:selMonth,amount_paid:selFlat.monthly_charge,mode:"Cash",payment_date:new Date().toISOString().split("T")[0]});
+                  showToast("✅ Flat "+selFlat.flat_no+" marked as paid for "+monthLabel(selMonth));
+                  setSelFlat(null);
+                  await loadMonthData(selMonth);
+                  var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
+                  if (s.data) setMonthlySummaries(s.data);
+                }}>✓ Mark Paid</button>
                 <button className="btn btn-secondary" onClick={function(){showToast("💬 Reminder sent to Flat "+selFlat.flat_no);}}>💬 Remind</button>
-                <button className="btn btn-secondary" onClick={function(){showToast("📄 Receipt for Flat "+selFlat.flat_no);}}>📄 Receipt</button>
                 <button className="btn btn-secondary" onClick={function(){showToast("📤 Bill sent to Flat "+selFlat.flat_no);}}>📤 Send Bill</button>
               </div>
             </div>
