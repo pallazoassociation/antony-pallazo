@@ -173,7 +173,7 @@ export default function App() {
   var [toast, setToast] = useState(null);
   var [payModal, setPayModal] = useState(false);
   var [noticePanel, setNoticePanel] = useState(null);
-  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:""});
+  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payType:"current",months:[]});
 
   // Auto-generate bills for a new month when it doesn't exist yet
   var autoGenBills = useCallback(async function(month, summary) {
@@ -322,22 +322,54 @@ export default function App() {
   }
 
   async function handlePayment() {
-    var amt = parseInt(payForm.amount, 10);
-    if (!amt || amt <= 0) { showToast("⚠️ Enter a valid amount"); return; }
     var flat = selFlat;
-    var result = await supabase.from("payments").insert({
-      flat_id: flat.id, billing_month: selMonth,
-      amount_paid: amt, mode: payForm.mode,
-      reference: payForm.ref,
-      payment_date: new Date().toISOString().split("T")[0]
-    });
-    if (result.error) { showToast("❌ " + result.error.message); return; }
-    await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",flat.id).eq("billing_month",selMonth);
+    var today = new Date().toISOString().split("T")[0];
+    var charge = flat.monthly_charge;
+
+    if (payForm.payType === "current") {
+      var amt = parseInt(payForm.amount, 10);
+      if (!amt || amt <= 0) { showToast("⚠️ Enter a valid amount"); return; }
+      var r = await supabase.from("payments").insert({
+        flat_id:flat.id, billing_month:selMonth, amount_paid:amt,
+        mode:payForm.mode, reference:payForm.ref||null, payment_date:today
+      });
+      if (r.error) { showToast("❌ "+r.error.message); return; }
+      await supabase.from("bills").update({status:"paid",arrears:0})
+        .eq("flat_id",flat.id).eq("billing_month",selMonth);
+      showToast("✅ Payment saved for "+monthLabel(selMonth));
+
+    } else {
+      // Advance payment — multiple months
+      if (!payForm.months || payForm.months.length === 0) {
+        showToast("⚠️ Select at least one month"); return;
+      }
+      var inserts = payForm.months.map(function(bm) {
+        return { flat_id:flat.id, billing_month:bm, amount_paid:charge,
+                 mode:payForm.mode, reference:payForm.ref||null, payment_date:today };
+      });
+      var r2 = await supabase.from("payments").insert(inserts);
+      if (r2.error) { showToast("❌ "+r2.error.message); return; }
+      // Mark each month as paid (create bill if missing)
+      for (var i = 0; i < payForm.months.length; i++) {
+        var bm = payForm.months[i];
+        var y = parseInt(bm.slice(0,4)), m = parseInt(bm.slice(5,7));
+        var dueM = m===12?"01":String(m+1).padStart(2,"0");
+        var dueY = m===12?y+1:y;
+        await supabase.from("bills").upsert(
+          { flat_id:flat.id, billing_month:bm, total_amount:charge, arrears:0,
+            due_date:dueY+"-"+dueM+"-10", status:"paid" },
+          { onConflict:"flat_id,billing_month" }
+        );
+        await supabase.from("bills").update({status:"paid",arrears:0})
+          .eq("flat_id",flat.id).eq("billing_month",bm);
+      }
+      showToast("✅ Advance payment saved for "+payForm.months.length+" month(s)!");
+    }
+
     await loadData();
     await loadMonthData(selMonth);
     setPayModal(false);
-    setPayForm({amount:"",mode:"Cash",ref:""});
-    showToast("✅ Payment saved!");
+    setPayForm({amount:"",mode:"Cash",ref:"",payType:"current",months:[]});
   }
 
   // Render guards
@@ -515,19 +547,119 @@ export default function App() {
           <div className="sheet" onClick={function(e){e.stopPropagation();}}>
             <div className="sheet-handle"/>
             <div className="sheet-head">
-              <div><div className="sheet-title">Record Payment</div><div className="sheet-sub">Flat {selFlat.flat_no} · {fmtRupee(selFlat.monthly_charge)}/month</div></div>
+              <div>
+                <div className="sheet-title">Record Payment</div>
+                <div className="sheet-sub">Flat {selFlat.flat_no} · {fmtRupee(selFlat.monthly_charge)}/month</div>
+              </div>
               <button className="close-btn" onClick={function(){setPayModal(false);}}>✕</button>
             </div>
             <div className="sheet-body">
-              <div className="form-group"><label className="form-label">Amount (₹)</label><input className="form-input" type="number" placeholder="e.g. 2000" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});});}}/></div>
-              <div className="form-group"><label className="form-label">Mode</label>
-                <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
-                  <option>Cash</option><option>UPI</option><option>NEFT</option><option>IMPS</option><option>Cheque</option><option>Bank Transfer</option>
+
+              {/* Payment type toggle */}
+              <div style={{display:"flex",gap:0,marginBottom:16,borderRadius:10,overflow:"hidden",border:"1.5px solid var(--border)"}}>
+                {[["current","📅 Current Month"],["advance","⏩ Advance"]].map(function(x){
+                  return (
+                    <button key={x[0]} onClick={function(){
+                      setPayForm(function(p){return Object.assign({},p,{payType:x[0],months:[],
+                        amount:x[0]==="current"?String(selFlat.monthly_charge):"" });});
+                    }} style={{flex:1,padding:"10px 6px",border:"none",cursor:"pointer",
+                      fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",
+                      background:payForm.payType===x[0]?"var(--gold)":"var(--card)",
+                      color:payForm.payType===x[0]?"#FFF":"var(--muted)"}}>
+                      {x[1]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Current month */}
+              {payForm.payType==="current" && (
+                <>
+                  <div style={{background:"var(--bg)",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13}}>
+                    <span style={{color:"var(--muted)"}}>Month: </span><span style={{fontWeight:600}}>{monthLabel(selMonth)}</span>
+                    <span style={{color:"var(--muted)",marginLeft:12}}>Expected: </span><span style={{fontWeight:600,color:"var(--gold)"}}>{fmtRupee(selFlat.monthly_charge)}</span>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Amount Received (₹)</label>
+                    <input className="form-input" type="number" placeholder={"e.g. "+selFlat.monthly_charge}
+                      value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});});}}/>
+                  </div>
+                </>
+              )}
+
+              {/* Advance payment */}
+              {payForm.payType==="advance" && (
+                <>
+                  <div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"var(--green)",fontWeight:500}}>
+                    ✅ Select months to pay in advance · {fmtRupee(selFlat.monthly_charge)} per month
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Select Months</label>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:6}}>
+                      {(function(){
+                        var shown = ALL_MONTHS.slice(-3);
+                        var last = ALL_MONTHS[ALL_MONTHS.length-1];
+                        var y=parseInt(last.slice(0,4)),m=parseInt(last.slice(5,7));
+                        for(var i=0;i<6;i++){
+                          m++; if(m>12){m=1;y++;}
+                          shown.push(y+"-"+String(m).padStart(2,"0"));
+                        }
+                        return shown;
+                      })().map(function(bm){
+                        var isSel = payForm.months.indexOf(bm)!==-1;
+                        return (
+                          <button key={bm} onClick={function(){
+                            setPayForm(function(p){
+                              var nm = isSel ? p.months.filter(function(x){return x!==bm;}) : p.months.concat([bm]);
+                              return Object.assign({},p,{months:nm, amount:String(selFlat.monthly_charge*nm.length)});
+                            });
+                          }} style={{padding:"6px 12px",borderRadius:99,border:"1.5px solid",cursor:"pointer",
+                            fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",
+                            borderColor:isSel?"var(--green)":"var(--border)",
+                            background:isSel?"#E8F5EE":"var(--card)",
+                            color:isSel?"var(--green)":"var(--muted)"}}>
+                            {isSel?"✓ ":""}{monthLabel(bm)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {payForm.months.length>0 && (
+                    <div style={{background:"var(--bg)",borderRadius:10,padding:"10px 14px",marginBottom:14}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                        <span style={{color:"var(--muted)"}}>{payForm.months.length} month(s)</span>
+                        <span style={{fontWeight:700,color:"var(--green)"}}>{fmtRupee(selFlat.monthly_charge*payForm.months.length)}</span>
+                      </div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>
+                        {payForm.months.slice().sort().map(monthLabel).join(", ")}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Common fields */}
+              <div className="form-group">
+                <label className="form-label">Payment Mode</label>
+                <select className="form-input" value={payForm.mode}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
+                  <option>Cash</option><option>UPI</option><option>NEFT</option>
+                  <option>IMPS</option><option>Cheque</option><option>Bank Transfer</option>
                 </select>
               </div>
-              <div className="form-group"><label className="form-label">Reference</label><input className="form-input" placeholder="Optional" value={payForm.ref} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{ref:e.target.value});});}}/></div>
-              <button className="btn btn-success mt10" onClick={handlePayment}>✅ Confirm & Save</button>
+              <div className="form-group">
+                <label className="form-label">Reference / Transaction ID</label>
+                <input className="form-input" placeholder="Optional"
+                  value={payForm.ref} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{ref:e.target.value});});}}/>
+              </div>
+
+              <button className="btn btn-success" onClick={handlePayment}>
+                {payForm.payType==="advance" && payForm.months.length>0
+                  ? "✅ Save Advance · "+fmtRupee(selFlat.monthly_charge*payForm.months.length)
+                  : "✅ Save Payment · "+fmtRupee(parseInt(payForm.amount)||selFlat.monthly_charge)}
+              </button>
               <button className="btn btn-secondary mt10" onClick={function(){setPayModal(false);}}>Cancel</button>
+
             </div>
           </div>
         </div>
