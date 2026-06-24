@@ -166,6 +166,10 @@ export default function App() {
   var [fdData,           setFdData]           = useState([]);
   var [acctSettings,     setAcctSettings]     = useState({});
   var [liveBalance,      setLiveBalance]      = useState(null);
+  var [maintenanceSlabs, setMaintenanceSlabs] = useState([]);
+  var [ebDetails,        setEbDetails]        = useState([]);
+  var [employeeDetails,  setEmployeeDetails]  = useState([]);
+  var [aptInfo,          setAptInfo]          = useState({});
   var [selMonth, setSelMonth] = useState(getCurrentMonth());
   var [selFlat, setSelFlat] = useState(null);
   var [filter, setFilter] = useState("all");
@@ -248,11 +252,23 @@ export default function App() {
       }
       if (results[9].data) setAllPayments(results[9].data);
 
-      // Live balance — try separately so failure doesn't block everything
+      // Info tables
+      var [slabs, ebs, emps, info] = await Promise.all([
+        supabase.from("maintenance_slabs").select("*").order("start_month"),
+        supabase.from("eb_details").select("*").order("block_name"),
+        supabase.from("employee_details").select("*").order("name"),
+        supabase.from("apartment_info").select("*"),
+      ]);
+      if (slabs.data) setMaintenanceSlabs(slabs.data);
+      if (ebs.data)   setEbDetails(ebs.data);
+      if (emps.data)  setEmployeeDetails(emps.data);
+      if (info.data)  { var ai={}; info.data.forEach(function(r){ai[r.key]=r.value;}); setAptInfo(ai); }
+
+      // Live balance — separate so failure doesn't block everything
       try {
         var lb = await supabase.from("live_bank_balance").select("*").single();
         if (lb.data) setLiveBalance(lb.data);
-      } catch(e2) { console.log("live_bank_balance view not ready yet"); }
+      } catch(e2) { console.log("live_bank_balance not ready"); }
 
     } catch(e) { console.error("loadData error:",e); }
     setDataLoading(false);
@@ -452,7 +468,9 @@ export default function App() {
     bankBal, activeFD, totalMaint, totalCorpus, totalOtherInc, fdMatured,
     totalExpAmt, totalIncome, filteredFlats, filter, setFilter, search, setSearch,
     selFlat: selFlat, setSelFlat: setSelFlat,
-    loadMonthData: loadMonthData, setMonthlySummaries: setMonthlySummaries
+    loadMonthData: loadMonthData, setMonthlySummaries: setMonthlySummaries,
+    maintenanceSlabs, ebDetails, employeeDetails, aptInfo,
+    setMaintenanceSlabs, setEbDetails, setEmployeeDetails, setAptInfo
   };
 
   return (
@@ -477,10 +495,11 @@ export default function App() {
         {tab==="overdue"  && <OverdueTab  {...sharedProps}/>}
         {tab==="income"   && <IncomeTab   {...sharedProps} reload={loadData}/>}
         {tab==="expenses" && <ExpensesTab {...sharedProps} reload={loadData}/>}
+        {tab==="info"     && <InfoTab     {...sharedProps} reload={loadData}/>}
       </div>
 
       <nav className="tabbar">
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"info",icon:"ℹ️",label:"Info"}].map(function(t){
           return (
             <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
@@ -594,15 +613,15 @@ export default function App() {
                     ✅ Select months to pay in advance · {fmtRupee(selFlat.monthly_charge)} per month
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Select Months</label>
+                    <label className="form-label">Select Months (current + next 18)</label>
                     <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:6}}>
                       {(function(){
-                        var shown = ALL_MONTHS.slice(-3);
-                        var last = ALL_MONTHS[ALL_MONTHS.length-1];
-                        var y=parseInt(last.slice(0,4)),m=parseInt(last.slice(5,7));
-                        for(var i=0;i<6;i++){
-                          m++; if(m>12){m=1;y++;}
+                        var shown = [];
+                        var now = new Date();
+                        var y = now.getFullYear(), m = now.getMonth()+1;
+                        for(var i=0;i<19;i++){
                           shown.push(y+"-"+String(m).padStart(2,"0"));
+                          m++; if(m>12){m=1;y++;}
                         }
                         return shown;
                       })().map(function(bm){
@@ -1280,6 +1299,333 @@ function ExpensesTab(props) {
                 <div className="form-group"><label className="form-label">Invoice No</label><input className="form-input" placeholder="Optional" value={form.invoice_no} onChange={function(e){setForm(function(p){return{...p,invoice_no:e.target.value};});}}/></div>
               </div>
               <button className="btn btn-success" onClick={saveExpense} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update Expense":"✅ Save Expense")}</button>
+              <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── InfoTab ────────────────────────────────────────────────────
+function InfoTab(props) {
+  var [sec, setSec] = useState("slabs");
+  var [showForm, setShowForm] = useState(false);
+  var [formType, setFormType] = useState("slab");
+  var [editing, setEditing] = useState(null);
+  var [saving, setSaving] = useState(false);
+  var [form, setForm] = useState({});
+  var [recalcResult, setRecalcResult] = useState(null);
+  var [recalcRunning, setRecalcRunning] = useState(false);
+
+  function openAdd(type) { setFormType(type); setEditing(null); setForm({}); setShowForm(true); setRecalcResult(null); }
+  function openEdit(type, item) { setFormType(type); setEditing(item); setForm(Object.assign({},item)); setShowForm(true); setRecalcResult(null); }
+
+  async function saveForm() {
+    setSaving(true);
+    var result;
+    if (formType==="slab") {
+      if (!form.start_month||!form.charge_1bhk||!form.charge_2bhk||!form.charge_3bhk) {
+        props.showToast("⚠️ Fill all fields"); setSaving(false); return;
+      }
+      var data = { start_month:form.start_month, end_month:form.end_month||null,
+        charge_1bhk:parseInt(form.charge_1bhk), charge_2bhk:parseInt(form.charge_2bhk), charge_3bhk:parseInt(form.charge_3bhk) };
+      result = editing
+        ? await supabase.from("maintenance_slabs").update(data).eq("id",editing.id)
+        : await supabase.from("maintenance_slabs").insert(data);
+    } else if (formType==="eb") {
+      var data = { block_name:form.block_name, service_no:form.service_no, notes:form.notes||null };
+      result = editing
+        ? await supabase.from("eb_details").update(data).eq("id",editing.id)
+        : await supabase.from("eb_details").insert(data);
+    } else if (formType==="employee") {
+      var data = { name:form.name, role:form.role||null, salary:parseInt(form.salary),
+        joined_date:form.joined_date||null, active:form.active!==false };
+      result = editing
+        ? await supabase.from("employee_details").update(data).eq("id",editing.id)
+        : await supabase.from("employee_details").insert(data);
+    } else if (formType==="aptinfo") {
+      var keys = Object.keys(form);
+      for (var i=0;i<keys.length;i++) {
+        await supabase.from("apartment_info").upsert({key:keys[i],value:String(form[keys[i]])},{onConflict:"key"});
+      }
+      props.showToast("✅ Info saved!"); setSaving(false); setShowForm(false); await props.reload(); return;
+    }
+    setSaving(false);
+    if (result&&result.error) { props.showToast("❌ "+result.error.message); return; }
+    props.showToast(editing?"✅ Updated!":"✅ Added!");
+    setShowForm(false);
+    await props.reload();
+  }
+
+  async function deleteItem(table, id) {
+    if (!window.confirm("Delete this entry?")) return;
+    await supabase.from(table).delete().eq("id",id);
+    props.showToast("🗑 Deleted");
+    await props.reload();
+  }
+
+  // Recalculate bills when slab changes
+  async function recalculateBills(slab) {
+    setRecalcRunning(true);
+    setRecalcResult(null);
+    var endM = slab.end_month || new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0");
+    // Find all bills in this slab's period
+    var {data:bills} = await supabase.from("bills").select("*,flats(bhk_type)")
+      .gte("billing_month", slab.start_month).lte("billing_month", endM);
+    if (!bills) { setRecalcRunning(false); return; }
+    var changes = [];
+    for (var i=0;i<bills.length;i++) {
+      var b = bills[i];
+      var bhk = b.flats?.bhk_type;
+      if (!bhk) continue;
+      var newCharge = bhk==="1BHK"?slab.charge_1bhk:bhk==="2BHK"?slab.charge_2bhk:slab.charge_3bhk;
+      if (newCharge !== b.total_amount) {
+        var diff = newCharge - b.total_amount;
+        var newArrears = b.status==="paid" ? Math.max(0,diff) : newCharge; // if paid and price went up, diff is owed
+        changes.push({flat_id:b.flat_id,billing_month:b.billing_month,old:b.total_amount,newAmt:newCharge,diff,status:b.status,newArrears});
+      }
+    }
+    setRecalcResult(changes);
+    setRecalcRunning(false);
+  }
+
+  async function applyRecalc(slab) {
+    if (!recalcResult||recalcResult.length===0) return;
+    setRecalcRunning(true);
+    var endM = slab.end_month || new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0");
+    for (var i=0;i<recalcResult.length;i++) {
+      var c = recalcResult[i];
+      // Update bill amount
+      var update = { total_amount: c.newAmt };
+      if (c.status==="paid" && c.diff>0) {
+        // Was paid but price went up — show difference as arrears/overdue
+        update.arrears = c.diff;
+        update.status = "overdue";
+      } else if (c.status==="overdue") {
+        update.arrears = c.newAmt;
+      }
+      await supabase.from("bills").update(update)
+        .eq("flat_id",c.flat_id).eq("billing_month",c.billing_month);
+    }
+    props.showToast("✅ Bills recalculated — "+recalcResult.length+" bills updated");
+    setRecalcResult(null);
+    setRecalcRunning(false);
+    await props.reload();
+  }
+
+  var G = { padding:"10px 16px 24px" };
+
+  return (
+    <>
+      <div style={{background:"linear-gradient(135deg,#1A1410,#2C2018)",margin:"14px 16px 0",borderRadius:16,padding:"16px 18px"}}>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}}>Apartment Information</div>
+        <div style={{color:"#FFF",fontSize:20,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{props.aptInfo.name||"Antony Pallazo"}</div>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:4}}>{props.aptInfo.address||""} · {props.aptInfo.total_flats||30} Flats</div>
+        <div style={{display:"flex",gap:16,marginTop:10}}>
+          {[["Corpus/Flat","₹"+(props.aptInfo.corpus_per_flat||5000)],["Due Day",props.aptInfo.due_day||"10"],["Total Flats",props.aptInfo.total_flats||30]].map(function(x){
+            return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
+          })}
+        </div>
+        <button onClick={function(){openAdd("aptinfo");setForm(Object.assign({},props.aptInfo));}}
+          style={{marginTop:12,background:"rgba(255,255,255,.15)",color:"#FFF",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          ✏️ Edit Info
+        </button>
+      </div>
+
+      <div className="income-tabs">
+        {[["slabs","🏠 Maintenance"],["eb","⚡ EB Details"],["employees","👷 Employees"]].map(function(x){
+          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
+        })}
+      </div>
+
+      {/* ── Maintenance Slabs ── */}
+      {sec==="slabs" && (
+        <div style={G}>
+          <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:12,padding:"12px 14px",marginBottom:14,fontSize:12,color:"#7A5C00",lineHeight:1.7}}>
+            <b>⚠️ Important:</b> When changing maintenance amount, set the <b>End Month</b> on the old slab, then add a new slab with the new amount and <b>Start Month</b>. Then use <b>Recalculate Bills</b> to update all affected bills — flats that paid advance will show the difference as overdue.
+          </div>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.maintenanceSlabs.length} slabs</div>
+            <button className="add-btn" onClick={function(){openAdd("slab");}}>＋ Add Slab</button>
+          </div>
+          <div className="card">
+            {props.maintenanceSlabs.map(function(s,i){
+              return (
+                <div key={s.id||i} style={{borderBottom:"1px solid var(--border)"}}>
+                  <div style={{padding:"12px 16px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:14}}>{monthLabel(s.start_month)} → {s.end_month?monthLabel(s.end_month):<span style={{color:"var(--green)",fontWeight:700}}>Present</span>}</div>
+                        <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Active slab</div>
+                      </div>
+                      <div style={{display:"flex",gap:6}}>
+                        <button onClick={function(){openEdit("slab",s);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
+                        <button onClick={function(){deleteItem("maintenance_slabs",s.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                      </div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                      {[["1 BHK","₹"+s.charge_1bhk],["2 BHK","₹"+s.charge_2bhk],["3 BHK","₹"+s.charge_3bhk]].map(function(x){
+                        return <div key={x[0]} style={{background:"var(--bg)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"var(--muted)"}}>{x[0]}</div>
+                          <div style={{fontWeight:700,fontSize:15,color:"var(--gold)",marginTop:2}}>{x[1]}</div>
+                        </div>;
+                      })}
+                    </div>
+                    <button onClick={function(){recalculateBills(s);}}
+                      disabled={recalcRunning}
+                      style={{marginTop:10,width:"100%",border:"1.5px solid var(--gold)",background:"#FFF9E6",color:"var(--gold)",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                      {recalcRunning?"⏳ Checking...":"🔄 Preview Bill Recalculation"}
+                    </button>
+                    {recalcResult && recalcResult.length===0 && (
+                      <div style={{marginTop:8,padding:"8px 10px",background:"#E8F5EE",borderRadius:8,fontSize:12,color:"var(--green)"}}>✅ All bills already correct for this slab</div>
+                    )}
+                    {recalcResult && recalcResult.length>0 && (
+                      <div style={{marginTop:8}}>
+                        <div style={{fontSize:12,fontWeight:600,marginBottom:6,color:"var(--red)"}}>{recalcResult.length} bills need updating:</div>
+                        <div style={{maxHeight:160,overflowY:"auto",borderRadius:8,border:"1px solid var(--border)"}}>
+                          {recalcResult.map(function(c){
+                            return <div key={c.flat_id+c.billing_month} style={{display:"flex",justifyContent:"space-between",padding:"6px 10px",borderBottom:"1px solid var(--border)",fontSize:12}}>
+                              <span>Flat {c.flat_id} · {monthLabel(c.billing_month)}</span>
+                              <span style={{color:c.diff>0?"var(--red)":"var(--green)",fontWeight:600}}>
+                                ₹{c.old} → ₹{c.newAmt} ({c.diff>0?"+":""}{c.diff})
+                                {c.status==="paid"&&c.diff>0?" ⚠️ overdue":""}
+                              </span>
+                            </div>;
+                          })}
+                        </div>
+                        <button onClick={function(){applyRecalc(s);}}
+                          style={{marginTop:8,width:"100%",border:"none",background:"var(--red)",color:"#FFF",borderRadius:8,padding:"10px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                          ⚡ Apply — Update {recalcResult.length} Bills
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── EB Details ── */}
+      {sec==="eb" && (
+        <div style={G}>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.ebDetails.length} blocks</div>
+            <button className="add-btn" onClick={function(){openAdd("eb");}}>＋ Add Block</button>
+          </div>
+          <div className="card">
+            {props.ebDetails.map(function(e,i){
+              return (
+                <div key={e.id||i} className="info-row">
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{e.block_name}</div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{e.notes||"EB Service Number"}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontWeight:700,fontSize:14,fontFamily:"monospace"}}>{e.service_no}</div>
+                    <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                      <button onClick={function(){openEdit("eb",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
+                      <button onClick={function(){deleteItem("eb_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Employees ── */}
+      {sec==="employees" && (
+        <div style={G}>
+          <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)",marginBottom:14}}>
+            <div style={{fontSize:10,color:"var(--muted)",letterSpacing:"1px",textTransform:"uppercase",marginBottom:6}}>Monthly Salary Total</div>
+            <div style={{fontSize:24,fontWeight:700,fontFamily:"'Playfair Display',serif",color:"var(--red)"}}>
+              {fmtRupee(props.employeeDetails.filter(function(e){return e.active;}).reduce(function(s,e){return s+e.salary;},0))}
+            </div>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{props.employeeDetails.filter(function(e){return e.active;}).length} active employees</div>
+          </div>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{props.employeeDetails.length} employees</div>
+            <button className="add-btn" onClick={function(){openAdd("employee");}}>＋ Add Employee</button>
+          </div>
+          <div className="card">
+            {props.employeeDetails.map(function(e,i){
+              return (
+                <div key={e.id||i} className="info-row">
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{e.name}</div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{e.role||"—"} {!e.active?"· Inactive":""}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontWeight:700,fontSize:14,color:"var(--red)"}}>{fmtRupee(e.salary)}/mo</div>
+                    <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                      <button onClick={function(){openEdit("employee",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
+                      <button onClick={function(){deleteItem("employee_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Add/Edit Sheet ── */}
+      {showForm && (
+        <div className="overlay" onClick={function(){setShowForm(false);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div><div className="sheet-title">{editing?"Edit":"Add"} {formType==="slab"?"Maintenance Slab":formType==="eb"?"EB Details":formType==="employee"?"Employee":"Apartment Info"}</div></div>
+              <button className="close-btn" onClick={function(){setShowForm(false);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              {formType==="slab" && <>
+                <div style={{background:"#FFF9E6",borderRadius:8,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#7A5C00"}}>
+                  To change rates mid-year: set <b>End Month</b> on this slab, then add a new slab with the new rates and correct Start Month.
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Start Month *</label><input className="form-input" type="month" value={form.start_month||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{start_month:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">End Month (blank = present)</label><input className="form-input" type="month" value={form.end_month||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{end_month:e.target.value||null});})}}/></div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">1 BHK (₹) *</label><input className="form-input" type="number" value={form.charge_1bhk||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{charge_1bhk:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">2 BHK (₹) *</label><input className="form-input" type="number" value={form.charge_2bhk||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{charge_2bhk:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">3 BHK (₹) *</label><input className="form-input" type="number" value={form.charge_3bhk||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{charge_3bhk:e.target.value});})}}/></div>
+                </div>
+              </>}
+              {formType==="eb" && <>
+                <div className="form-group"><label className="form-label">Block Name *</label><input className="form-input" placeholder="e.g. A Block" value={form.block_name||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{block_name:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">EB Service Number *</label><input className="form-input" placeholder="e.g. 9331118361" value={form.service_no||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{service_no:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">Notes</label><input className="form-input" placeholder="Optional" value={form.notes||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{notes:e.target.value});})}}/></div>
+              </>}
+              {formType==="employee" && <>
+                <div className="form-group"><label className="form-label">Name *</label><input className="form-input" value={form.name||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{name:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">Role</label><input className="form-input" placeholder="e.g. Security, Housekeeping" value={form.role||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{role:e.target.value});})}}/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Monthly Salary (₹) *</label><input className="form-input" type="number" value={form.salary||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{salary:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Joined Date</label><input className="form-input" type="date" value={form.joined_date||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{joined_date:e.target.value});})}}/></div>
+                </div>
+                <div className="form-group">
+                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13}}>
+                    <input type="checkbox" checked={form.active!==false} onChange={function(e){setForm(function(p){return Object.assign({},p,{active:e.target.checked});});}}/> Active Employee
+                  </label>
+                </div>
+              </>}
+              {formType==="aptinfo" && <>
+                <div className="form-group"><label className="form-label">Apartment Name</label><input className="form-input" value={form.name||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{name:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">Address</label><input className="form-input" value={form.address||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{address:e.target.value});})}}/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Total Flats</label><input className="form-input" type="number" value={form.total_flats||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{total_flats:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Corpus per Flat (₹)</label><input className="form-input" type="number" value={form.corpus_per_flat||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{corpus_per_flat:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Due Day of Month</label><input className="form-input" type="number" min="1" max="31" value={form.due_day||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{due_day:e.target.value});})}}/></div>
+                </div>
+              </>}
+              <button className="btn btn-success" onClick={saveForm} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update":"✅ Save")}</button>
               <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
             </div>
           </div>
