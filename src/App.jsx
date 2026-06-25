@@ -210,13 +210,28 @@ export default function App() {
       .select("*")
       .eq("billing_month", month);
     if (result.data && result.data.length > 0) {
+      // Auto-mark overdue if today > 15th and this is current month
+      var today = new Date();
+      var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+      if (month === curMonth && today.getDate() > 15) {
+        var needsUpdate = result.data.filter(function(b){ return b.status==="overdue" && (!b.arrears||b.arrears===0); });
+        if (needsUpdate.length > 0) {
+          for (var i=0; i<needsUpdate.length; i++) {
+            await supabase.from("bills").update({arrears: needsUpdate[i].total_amount})
+              .eq("flat_id",needsUpdate[i].flat_id).eq("billing_month",month);
+          }
+          result = await supabase.from("flat_month_status").select("*").eq("billing_month",month);
+          // Refresh overdue summary
+          var ov = await supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month");
+          if (ov.data) setOverdueBills(ov.data);
+        }
+      }
       setMonthBillsData(result.data);
     } else {
       // No bills for this month — auto-generate them
       await autoGenBills(month, null);
       var result2 = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
       if (result2.data) setMonthBillsData(result2.data);
-      // Refresh summaries too
       var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
       if (s.data) setMonthlySummaries(s.data);
     }
@@ -1422,9 +1437,16 @@ function InfoTab(props) {
       <div style={{background:"linear-gradient(135deg,#1A1410,#2C2018)",margin:"14px 16px 0",borderRadius:16,padding:"16px 18px"}}>
         <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}}>Apartment Information</div>
         <div style={{color:"#FFF",fontSize:20,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{props.aptInfo.name||"Antony Pallazo"}</div>
-        <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:4}}>{props.aptInfo.address||""} · {props.aptInfo.total_flats||30} Flats</div>
-        <div style={{display:"flex",gap:16,marginTop:10}}>
-          {[["Due Day",props.aptInfo.due_day||"10"],["Total Flats",props.aptInfo.total_flats||30],["Corpus/Flat","₹"+(props.aptInfo.corpus_per_flat||5000)]].map(function(x){
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:4}}>{props.aptInfo.address||""}</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:16,marginTop:10}}>
+          {[
+            ["Total Flats",  props.aptInfo.total_flats||30],
+            ["Due Day",      props.aptInfo.due_day||"10"],
+            ["Corpus/Flat",  "₹"+(props.aptInfo.corpus_per_flat||5000)],
+            ["3 BHK",        props.flats.filter(function(f){return f.bhk_type==="3BHK";}).length||6],
+            ["2 BHK",        props.flats.filter(function(f){return f.bhk_type==="2BHK";}).length||17],
+            ["1 BHK",        props.flats.filter(function(f){return f.bhk_type==="1BHK";}).length||7],
+          ].map(function(x){
             return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
           })}
         </div>
@@ -1651,6 +1673,7 @@ function InfoTab(props) {
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                   <div className="form-group"><label className="form-label">Total Flats</label><input className="form-input" type="number" value={form.total_flats||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{total_flats:e.target.value});})}}/></div>
                   <div className="form-group"><label className="form-label">Due Day of Month</label><input className="form-input" type="number" min="1" max="31" value={form.due_day||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{due_day:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Corpus per Flat (₹)</label><input className="form-input" type="number" value={form.corpus_per_flat||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{corpus_per_flat:e.target.value});})}}/></div>
                 </div>
               </>}
               {formType==="bankinfo" && <>
