@@ -557,17 +557,40 @@ export default function App() {
               )}
               <div className="btn-grid">
                 <button className="btn btn-primary" onClick={function(){setPayModal(true);}}>💸 Record Payment</button>
-                <button className="btn btn-success" onClick={async function(){
-                  var bill = getBillForFlat(selFlat.id);
-                  if (!bill) { showToast("⚠️ No bill found for "+monthLabel(selMonth)); return; }
-                  await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",selFlat.id).eq("billing_month",selMonth);
-                  await supabase.from("payments").insert({flat_id:selFlat.id,billing_month:selMonth,amount_paid:selFlat.monthly_charge,mode:"Cash",payment_date:new Date().toISOString().split("T")[0]});
-                  showToast("✅ Flat "+selFlat.flat_no+" marked as paid for "+monthLabel(selMonth));
-                  setSelFlat(null);
-                  await loadMonthData(selMonth);
-                  var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
-                  if (s.data) setMonthlySummaries(s.data);
-                }}>✓ Mark Paid</button>
+
+                {getStatusForFlat(selFlat.id) === "paid" ? (
+                  /* Already paid — show Revert to Unpaid option */
+                  <button className="btn btn-secondary" style={{borderColor:"var(--red)",color:"var(--red)"}}
+                    onClick={async function(){
+                      if (!window.confirm("Revert Flat "+selFlat.flat_no+" to UNPAID for "+monthLabel(selMonth)+"?\n\nThis will:\n• Mark bill as overdue\n• Delete the payment record for this month")) return;
+                      // Mark bill as overdue
+                      await supabase.from("bills")
+                        .update({status:"overdue", arrears:selFlat.monthly_charge})
+                        .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                      // Delete payment record for this month
+                      await supabase.from("payments")
+                        .delete()
+                        .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                      showToast("↩️ Flat "+selFlat.flat_no+" reverted to unpaid for "+monthLabel(selMonth));
+                      setSelFlat(null);
+                      await loadMonthData(selMonth);
+                      await loadData();
+                    }}>↩️ Revert Unpaid</button>
+                ) : (
+                  /* Not paid — show Mark Paid */
+                  <button className="btn btn-success" onClick={async function(){
+                    var bill = getBillForFlat(selFlat.id);
+                    if (!bill) { showToast("⚠️ No bill found for "+monthLabel(selMonth)); return; }
+                    await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                    await supabase.from("payments").insert({flat_id:selFlat.id,billing_month:selMonth,amount_paid:selFlat.monthly_charge,mode:"Cash",payment_date:new Date().toISOString().split("T")[0]});
+                    showToast("✅ Flat "+selFlat.flat_no+" marked as paid for "+monthLabel(selMonth));
+                    setSelFlat(null);
+                    await loadMonthData(selMonth);
+                    var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
+                    if (s.data) setMonthlySummaries(s.data);
+                  }}>✓ Mark Paid</button>
+                )}
+
                 <button className="btn btn-secondary" onClick={function(){showToast("💬 Reminder sent to Flat "+selFlat.flat_no);}}>💬 Remind</button>
                 <button className="btn btn-secondary" onClick={function(){showToast("📤 Bill sent to Flat "+selFlat.flat_no);}}>📤 Send Bill</button>
               </div>
