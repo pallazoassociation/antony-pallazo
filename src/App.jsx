@@ -1440,12 +1440,11 @@ function InfoTab(props) {
         <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:4}}>{props.aptInfo.address||""}</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:16,marginTop:10}}>
           {[
-            ["Total Flats",  props.aptInfo.total_flats||30],
-            ["Due Day",      props.aptInfo.due_day||"10"],
-            ["Corpus/Flat",  "₹"+(props.aptInfo.corpus_per_flat||5000)],
-            ["3 BHK",        props.flats.filter(function(f){return f.bhk_type==="3BHK";}).length||6],
-            ["2 BHK",        props.flats.filter(function(f){return f.bhk_type==="2BHK";}).length||17],
-            ["1 BHK",        props.flats.filter(function(f){return f.bhk_type==="1BHK";}).length||7],
+            ["Total Flats", props.aptInfo.total_flats||30],
+            ["Due Day",     props.aptInfo.due_day||"10"],
+            ["3 BHK",       props.flats.filter(function(f){return f.bhk_type==="3BHK";}).length||6],
+            ["2 BHK",       props.flats.filter(function(f){return f.bhk_type==="2BHK";}).length||17],
+            ["1 BHK",       props.flats.filter(function(f){return f.bhk_type==="1BHK";}).length||7],
           ].map(function(x){
             return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
           })}
