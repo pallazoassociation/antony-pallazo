@@ -1424,7 +1424,7 @@ function InfoTab(props) {
         <div style={{color:"#FFF",fontSize:20,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{props.aptInfo.name||"Antony Pallazo"}</div>
         <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:4}}>{props.aptInfo.address||""} · {props.aptInfo.total_flats||30} Flats</div>
         <div style={{display:"flex",gap:16,marginTop:10}}>
-          {[["Corpus/Flat","₹"+(props.aptInfo.corpus_per_flat||5000)],["Due Day",props.aptInfo.due_day||"10"],["Total Flats",props.aptInfo.total_flats||30]].map(function(x){
+          {[["Due Day",props.aptInfo.due_day||"10"],["Total Flats",props.aptInfo.total_flats||30],["Corpus/Flat","₹"+(props.aptInfo.corpus_per_flat||5000)]].map(function(x){
             return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
           })}
         </div>
@@ -1435,7 +1435,7 @@ function InfoTab(props) {
       </div>
 
       <div className="income-tabs">
-        {[["slabs","🏠 Maintenance"],["eb","⚡ EB Details"],["employees","👷 Employees"]].map(function(x){
+        {[["slabs","🏠 Maintenance"],["eb","⚡ EB"],["employees","👷 Staff"],["bank","🏦 Bank"]].map(function(x){
           return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
         })}
       </div>
@@ -1574,6 +1574,35 @@ function InfoTab(props) {
         </div>
       )}
 
+
+      {/* ── Bank Account ── */}
+      {sec==="bank" && (
+        <div style={G}>
+          <div style={{background:"linear-gradient(135deg,#0A2A4A,#0D3B6E)",borderRadius:14,padding:"18px 16px",marginBottom:14}}>
+            <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}}>Association Bank Account</div>
+            <div style={{color:"#FFF",fontSize:15,fontWeight:700,lineHeight:1.5}}>{props.aptInfo.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION – MEDAVAKKAM"}</div>
+          </div>
+          <div className="card" style={{marginBottom:14}}>
+            {[
+              ["Account Number", props.aptInfo.acc_no    || "270201000458"],
+              ["Bank",          props.aptInfo.bank_name  || "ICICI BANK LTD"],
+              ["Branch",        props.aptInfo.branch     || "KOVILAMBAKKAM"],
+              ["IFSC Code",     props.aptInfo.ifsc       || "ICIC0002702"],
+              ["UPI ID",        props.aptInfo.upi_id     || "pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"],
+            ].map(function(row){
+              return (
+                <div key={row[0]} className="info-row" style={{flexWrap:"wrap",gap:4}}>
+                  <span className="ir-label" style={{flexShrink:0,minWidth:110}}>{row[0]}</span>
+                  <span className="ir-value" style={{wordBreak:"break-all",fontFamily:row[0]==="Account Number"||row[0]==="IFSC Code"?"monospace":"inherit",letterSpacing:row[0]==="Account Number"?"1.5px":"inherit"}}>{row[1]}</span>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={function(){setFormType("bankinfo");setEditing(null);setForm(Object.assign({},props.aptInfo));setShowForm(true);}}
+            className="btn btn-secondary">✏️ Edit Bank Details</button>
+        </div>
+      )}
+
       {/* ── Add/Edit Sheet ── */}
       {showForm && (
         <div className="overlay" onClick={function(){setShowForm(false);}}>
@@ -1621,9 +1650,18 @@ function InfoTab(props) {
                 <div className="form-group"><label className="form-label">Address</label><input className="form-input" value={form.address||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{address:e.target.value});})}}/></div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                   <div className="form-group"><label className="form-label">Total Flats</label><input className="form-input" type="number" value={form.total_flats||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{total_flats:e.target.value});})}}/></div>
-                  <div className="form-group"><label className="form-label">Corpus per Flat (₹)</label><input className="form-input" type="number" value={form.corpus_per_flat||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{corpus_per_flat:e.target.value});})}}/></div>
                   <div className="form-group"><label className="form-label">Due Day of Month</label><input className="form-input" type="number" min="1" max="31" value={form.due_day||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{due_day:e.target.value});})}}/></div>
                 </div>
+              </>}
+              {formType==="bankinfo" && <>
+                <div className="form-group"><label className="form-label">Account Name</label><input className="form-input" value={form.acc_name||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{acc_name:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">Account Number</label><input className="form-input" placeholder="e.g. 270201000458" value={form.acc_no||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{acc_no:e.target.value});})}}/></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Bank Name</label><input className="form-input" value={form.bank_name||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{bank_name:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Branch</label><input className="form-input" value={form.branch||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{branch:e.target.value});})}}/></div>
+                </div>
+                <div className="form-group"><label className="form-label">IFSC Code</label><input className="form-input" placeholder="e.g. ICIC0002702" value={form.ifsc||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{ifsc:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">UPI ID</label><input className="form-input" placeholder="e.g. name@icici" value={form.upi_id||""} onChange={function(e){setForm(function(p){return Object.assign({},p,{upi_id:e.target.value});})}}/></div>
               </>}
               <button className="btn btn-success" onClick={saveForm} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update":"✅ Save")}</button>
               <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
