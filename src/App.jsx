@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabase";
+import * as XLSX from "xlsx";
 import "./app.css";
 
 function fmtRupee(n) { return "₹" + Number(n || 0).toLocaleString("en-IN"); }
@@ -639,14 +640,15 @@ export default function App() {
         {tab==="overdue"  && <OverdueTab  {...sharedProps}/>}
         {tab==="income"   && <IncomeTab   {...sharedProps} reload={loadData}/>}
         {tab==="expenses" && <ExpensesTab {...sharedProps} reload={loadData}/>}
+        {tab==="reports"  && <ReportsTab  {...sharedProps}/>}
         {tab==="info"     && <InfoTab     {...sharedProps} reload={loadData}/>}
         {tab==="approvals"&& <ApprovalsTab {...sharedProps} reload={loadData}/>}
       </div>
 
-      <nav className="tabbar">
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"info",icon:"ℹ️",label:"Info"},{id:"approvals",icon:"✅",label:"Approvals",badge:true}].map(function(t){
+      <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"approvals",icon:"✅",label:"Approvals",badge:true}].map(function(t){
           return (
-            <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative"}}>
+            <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:64,flexShrink:0}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
               {t.badge && sharedProps.pendingCount>0 && (
                 <span style={{position:"absolute",top:6,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 5px",minWidth:16,textAlign:"center"}}>{sharedProps.pendingCount}</span>
@@ -2570,5 +2572,584 @@ function ApprovalsTab(props) {
         </div>
       )}
     </>
+  );
+}
+
+// ── ReportsTab ─────────────────────────────────────────────────
+function ReportsTab(props) {
+  var [activeReport, setActiveReport] = useState(null);
+  var [reportData, setReportData] = useState(null);
+  var [loadingReport, setLoadingReport] = useState(false);
+  var [filters, setFilters] = useState({fromMonth:"2022-06", toMonth:getCurrentMonth(), flatId:""});
+
+  var ALL_FLATS_LIST = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
+
+  var REPORT_CATEGORIES = [
+    { cat:"Financial", reports:[
+      {id:"monthly_collection", icon:"📅", name:"Monthly Collection Summary", desc:"Billed vs collected vs outstanding, by month"},
+      {id:"income_expenditure",  icon:"📈", name:"Income & Expenditure",       desc:"Full income/expense statement for a period"},
+      {id:"bank_balance",        icon:"🏦", name:"Bank Balance Statement",     desc:"Opening, inflows, outflows, closing balance"},
+      {id:"expense_category",    icon:"🥧", name:"Expense by Category",       desc:"Category-wise expense breakdown with trend"},
+      {id:"corpus_register",     icon:"💎", name:"Corpus Fund Register",      desc:"Who paid, who hasn't, running total"},
+      {id:"fd_register",         icon:"🏛", name:"Fixed Deposit Register",    desc:"Investments, maturities, interest earned"},
+    ]},
+    { cat:"Collection & Dues", reports:[
+      {id:"flat_ledger",     icon:"📒", name:"Flat-wise Ledger",        desc:"Complete payment history for one flat"},
+      {id:"defaulter_list",  icon:"🚨", name:"Defaulter / Dues Report", desc:"Current & all-time overdue, sorted by severity"},
+      {id:"ageing_report",   icon:"⏳", name:"Arrear Ageing Report",    desc:"0-30 / 31-60 / 61-90 / 90+ days overdue"},
+      {id:"payment_mode",    icon:"💳", name:"Payment Mode Summary",    desc:"Cash / UPI / NEFT / Cheque reconciliation"},
+      {id:"advance_payment", icon:"⏩", name:"Advance Payment Report",  desc:"Flats that have pre-paid future months"},
+    ]},
+    { cat:"Resident & Operational", reports:[
+      {id:"agm_report",     icon:"📋", name:"Annual General Report",   desc:"Full year summary for AGM presentation"},
+      {id:"salary_register",icon:"👷", name:"Staff Salary Register",   desc:"Monthly payslip-style summary"},
+      {id:"slab_history",   icon:"🏷", name:"Maintenance Slab History",desc:"When rates changed and by how much"},
+      {id:"eb_summary",     icon:"⚡", name:"EB / Utility Summary",    desc:"Block-wise electricity service numbers"},
+    ]},
+  ];
+
+  async function openReport(reportId) {
+    setActiveReport(reportId);
+    setLoadingReport(true);
+    setReportData(null);
+    var data = {};
+
+    if (reportId==="monthly_collection") {
+      var r = await supabase.from("monthly_summary").select("*").order("billing_month");
+      data.rows = r.data || [];
+    }
+    else if (reportId==="income_expenditure") {
+      var [pay, exp, oi, cp, fd] = await Promise.all([
+        supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth),
+        supabase.from("expenses").select("*").gte("expense_date",filters.fromMonth+"-01").lte("expense_date",filters.toMonth+"-31"),
+        supabase.from("other_income").select("*"),
+        supabase.from("corpus_payments").select("*"),
+        supabase.from("fixed_deposits").select("*"),
+      ]);
+      data.payments = pay.data||[]; data.expenses = exp.data||[];
+      data.otherIncome = oi.data||[]; data.corpus = cp.data||[]; data.fd = fd.data||[];
+    }
+    else if (reportId==="bank_balance") {
+      var lb = await supabase.from("live_bank_balance").select("*").single();
+      data.balance = lb.data || {};
+    }
+    else if (reportId==="expense_category") {
+      var e = await supabase.from("expenses").select("*").gte("expense_date",filters.fromMonth+"-01").lte("expense_date",filters.toMonth+"-31");
+      data.rows = e.data || [];
+    }
+    else if (reportId==="corpus_register") {
+      var c = await supabase.from("corpus_payments").select("*").order("paid_date");
+      data.rows = c.data || [];
+    }
+    else if (reportId==="fd_register") {
+      var f = await supabase.from("fixed_deposits").select("*").order("invested_date");
+      data.rows = f.data || [];
+    }
+    else if (reportId==="flat_ledger") {
+      if (filters.flatId) {
+        var [bills, pays] = await Promise.all([
+          supabase.from("bills").select("*").eq("flat_id",filters.flatId).order("billing_month"),
+          supabase.from("payments").select("*").eq("flat_id",filters.flatId).order("payment_date"),
+        ]);
+        data.bills = bills.data||[]; data.payments = pays.data||[];
+      }
+    }
+    else if (reportId==="defaulter_list") {
+      var ov = await supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month");
+      data.rows = ov.data || [];
+    }
+    else if (reportId==="ageing_report") {
+      var ov2 = await supabase.from("overdue_summary").select("*");
+      data.rows = ov2.data || [];
+    }
+    else if (reportId==="payment_mode") {
+      var p2 = await supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth);
+      data.rows = p2.data || [];
+    }
+    else if (reportId==="advance_payment") {
+      var bills2 = await supabase.from("bills").select("*").eq("status","paid").gt("billing_month",getCurrentMonth());
+      data.rows = bills2.data || [];
+    }
+    else if (reportId==="agm_report") {
+      var [pay2, exp2, ov3, lb2] = await Promise.all([
+        supabase.from("payments").select("*"),
+        supabase.from("expenses").select("*"),
+        supabase.from("overdue_summary").select("*"),
+        supabase.from("live_bank_balance").select("*").single(),
+      ]);
+      data.payments = pay2.data||[]; data.expenses = exp2.data||[];
+      data.overdue = ov3.data||[]; data.balance = lb2.data||{};
+    }
+    else if (reportId==="salary_register") {
+      data.rows = props.employeeDetails || [];
+    }
+    else if (reportId==="slab_history") {
+      data.rows = props.maintenanceSlabs || [];
+    }
+    else if (reportId==="eb_summary") {
+      data.rows = props.ebDetails || [];
+    }
+
+    setReportData(data);
+    setLoadingReport(false);
+  }
+
+  function printReport() {
+    window.print();
+  }
+
+  if (activeReport) {
+    return (
+      <ReportViewer
+        reportId={activeReport}
+        data={reportData}
+        loading={loadingReport}
+        filters={filters}
+        setFilters={setFilters}
+        onReload={function(){openReport(activeReport);}}
+        onBack={function(){setActiveReport(null);setReportData(null);}}
+        onPrint={printReport}
+        flatsList={ALL_FLATS_LIST}
+        flats={props.flats}
+        aptInfo={props.aptInfo}
+      />
+    );
+  }
+
+  return (
+    <div style={{padding:"14px 16px 24px"}}>
+      <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:12}}>Available Reports</div>
+      {REPORT_CATEGORIES.map(function(group){
+        return (
+          <div key={group.cat} style={{marginBottom:18}}>
+            <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",marginBottom:8}}>{group.cat}</div>
+            <div className="card">
+              {group.reports.map(function(r){
+                return (
+                  <div key={r.id} className="rep-item" onClick={function(){openReport(r.id);}}>
+                    <div className="rep-left">
+                      <div className="rep-icon">{r.icon}</div>
+                      <div><div className="rep-name">{r.name}</div><div className="rep-desc">{r.desc}</div></div>
+                    </div>
+                    <div style={{fontSize:18,color:"var(--muted)"}}>›</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+var REPORT_TITLES = {
+  monthly_collection:"Monthly_Collection_Summary", income_expenditure:"Income_Expenditure",
+  bank_balance:"Bank_Balance_Statement", expense_category:"Expense_by_Category",
+  corpus_register:"Corpus_Fund_Register", fd_register:"Fixed_Deposit_Register",
+  flat_ledger:"Flat_Ledger", defaulter_list:"Defaulter_List", ageing_report:"Arrear_Ageing",
+  payment_mode:"Payment_Mode_Summary", advance_payment:"Advance_Payment",
+  agm_report:"AGM_Report", salary_register:"Salary_Register",
+  slab_history:"Maintenance_Slab_History", eb_summary:"EB_Summary"
+};
+
+// ── ReportViewer ───────────────────────────────────────────────
+function ReportViewer(props) {
+  var id = props.reportId;
+  var d  = props.data || {};
+  var apt = props.aptInfo || {};
+
+  function Header(title, sub) {
+    return (
+      <div className="print-header">
+        <div style={{fontSize:20,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{apt.name||"Antony Pallazo"}</div>
+        <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{apt.address||""}</div>
+        <div style={{fontSize:15,fontWeight:700,marginTop:12}}>{title}</div>
+        {sub && <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{sub}</div>}
+        <div style={{fontSize:10,color:"var(--muted)",marginTop:6}}>Generated on {new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})}</div>
+      </div>
+    );
+  }
+
+  var exportRef = { headers:[], rows:[], title:"" };
+
+  function Toolbar() {
+    return (
+      <div className="report-toolbar">
+        <button className="btn btn-secondary" onClick={props.onBack} style={{flex:"none",padding:"8px 14px"}}>← Back</button>
+        <button className="btn btn-secondary" onClick={function(){exportExcel();}} style={{flex:"none",padding:"8px 14px"}}>📊 Excel</button>
+        <button className="btn btn-primary" onClick={props.onPrint} style={{flex:"none",padding:"8px 14px"}}>🖨 Print / PDF</button>
+      </div>
+    );
+  }
+
+  function exportExcel() {
+    if (!exportRef.rows.length) { alert("No data to export"); return; }
+    var ws = XLSX.utils.aoa_to_sheet([exportRef.headers].concat(exportRef.rows));
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    var fname = (exportRef.title||"report").replace(/[^a-z0-9]/gi,"_")+"_"+new Date().toISOString().slice(0,10)+".xlsx";
+    XLSX.writeFile(wb, fname);
+  }
+
+  function Table(headers, rows) {
+    exportRef.headers = headers;
+    exportRef.title = REPORT_TITLES[id] || id;
+    // Auto-extract plain-text rows from the JSX <tr><td> structure for Excel export
+    exportRef.rows = rows.map(function(tr) {
+      var cells = Array.isArray(tr.props.children) ? tr.props.children : [tr.props.children];
+      return cells.map(function(td) {
+        if (td == null) return "";
+        var content = td.props ? td.props.children : td;
+        if (Array.isArray(content)) {
+          return content.map(function(c){ return (c && c.props) ? extractText(c) : c; }).join("");
+        }
+        return content==null ? "" : String(content);
+      });
+    });
+    return (
+      <table className="report-table">
+        <thead><tr>{headers.map(function(h){return <th key={h}>{h}</th>;})}</tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    );
+  }
+
+  function extractText(node) {
+    if (node==null) return "";
+    if (typeof node==="string"||typeof node==="number") return String(node);
+    if (Array.isArray(node)) return node.map(extractText).join("");
+    if (node.props && node.props.children) return extractText(node.props.children);
+    return "";
+  }
+
+  if (props.loading) return (
+    <div style={{padding:"40px 20px",textAlign:"center"}}>
+      <Toolbar/>
+      <div style={{marginTop:30}}><div className="spinner" style={{borderTopColor:"var(--gold)",borderColor:"var(--border)"}}/></div>
+      <div style={{color:"var(--muted)",marginTop:12,fontSize:13}}>Loading report data…</div>
+    </div>
+  );
+
+  return (
+    <div className="report-wrap">
+      <Toolbar/>
+      <div className="report-content">
+
+        {/* 1. Monthly Collection Summary */}
+        {id==="monthly_collection" && (<>
+          {Header("Monthly Collection Summary","All months · "+(d.rows?d.rows.length:0)+" records")}
+          {Table(["Month","Flats","Paid","Overdue","Collected","Dues","Expected"],
+            (d.rows||[]).map(function(r){
+              return <tr key={r.billing_month}>
+                <td>{monthLabel(r.billing_month)}</td><td>{r.total_flats}</td>
+                <td style={{color:"var(--green)"}}>{r.paid_count}</td>
+                <td style={{color:"var(--red)"}}>{r.overdue_count}</td>
+                <td>{fmtRupee(r.collected)}</td><td>{fmtRupee(r.dues)}</td><td>{fmtRupee(r.expected)}</td>
+              </tr>;
+            })
+          )}
+          <div className="report-totals">
+            Total Collected: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+(r.collected||0);},0))}</b> ·
+            Total Dues: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+(r.dues||0);},0))}</b>
+          </div>
+        </>)}
+
+        {/* 2. Income & Expenditure */}
+        {id==="income_expenditure" && (<>
+          {Header("Income & Expenditure Statement", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
+          <div className="report-filter-row">
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+          </div>
+          {(function(){
+            var totalMaint = (d.payments||[]).reduce(function(s,p){return s+(p.amount_paid||0);},0);
+            var totalOther = (d.otherIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).reduce(function(s,o){return s+(o.amount||0);},0);
+            var totalCorpus = (d.corpus||[]).reduce(function(s,c){return s+(c.amount||0);},0);
+            var totalFdMat = (d.fd||[]).filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0);
+            var totalIncome = totalMaint+totalOther+totalCorpus+totalFdMat;
+            var totalExp = (d.expenses||[]).reduce(function(s,e){return s+(e.amount||0);},0);
+            return (<>
+              <div className="report-section-title">Income</div>
+              {Table(["Source","Amount"],[
+                <tr key="m"><td>Maintenance Collected</td><td>{fmtRupee(totalMaint)}</td></tr>,
+                <tr key="o"><td>Other Income</td><td>{fmtRupee(totalOther)}</td></tr>,
+                <tr key="c"><td>Corpus Fund</td><td>{fmtRupee(totalCorpus)}</td></tr>,
+                <tr key="f"><td>FD Matured</td><td>{fmtRupee(totalFdMat)}</td></tr>,
+              ])}
+              <div className="report-totals">Total Income: <b>{fmtRupee(totalIncome)}</b></div>
+              <div className="report-section-title" style={{marginTop:16}}>Expenditure</div>
+              {Table(["Category","Amount"],
+                Object.entries((d.expenses||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{}))
+                  .sort(function(a,b){return b[1]-a[1];})
+                  .map(function(c){return <tr key={c[0]}><td>{c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
+              )}
+              <div className="report-totals">Total Expenditure: <b>{fmtRupee(totalExp)}</b></div>
+              <div className="report-totals" style={{borderTop:"2px solid var(--text)",paddingTop:8,marginTop:8}}>
+                Net Surplus / Deficit: <b style={{color:totalIncome-totalExp>=0?"var(--green)":"var(--red)"}}>{fmtRupee(totalIncome-totalExp)}</b>
+              </div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 3. Bank Balance Statement */}
+        {id==="bank_balance" && (<>
+          {Header("Bank Balance Statement","As of "+new Date().toLocaleDateString("en-IN"))}
+          {Table(["Item","Amount"],[
+            <tr key="o"><td>Opening Balance (May 2022)</td><td>{fmtRupee(d.balance?.opening_balance)}</td></tr>,
+            <tr key="m"><td>(+) Maintenance Collected</td><td style={{color:"var(--green)"}}>{fmtRupee(d.balance?.total_maintenance)}</td></tr>,
+            <tr key="c"><td>(+) Corpus Fund</td><td style={{color:"var(--green)"}}>{fmtRupee(d.balance?.total_corpus)}</td></tr>,
+            <tr key="oi"><td>(+) Other Income</td><td style={{color:"var(--green)"}}>{fmtRupee(d.balance?.total_other_income)}</td></tr>,
+            <tr key="fm"><td>(+) FD Matured</td><td style={{color:"var(--green)"}}>{fmtRupee(d.balance?.total_fd_matured)}</td></tr>,
+            <tr key="e"><td>(−) Total Expenses</td><td style={{color:"var(--red)"}}>{fmtRupee(d.balance?.total_expenses)}</td></tr>,
+            <tr key="fi"><td>(−) FD Invested</td><td style={{color:"var(--red)"}}>{fmtRupee(d.balance?.total_fd_invested)}</td></tr>,
+          ])}
+          <div className="report-totals" style={{borderTop:"2px solid var(--text)",paddingTop:8}}>
+            Net Bank Balance: <b style={{color:"var(--green)"}}>{fmtRupee(d.balance?.net_bank_balance)}</b><br/>
+            Active FD (separate asset): <b>{fmtRupee(d.balance?.active_fd_amount)}</b>
+          </div>
+        </>)}
+
+        {/* 4. Expense by Category */}
+        {id==="expense_category" && (<>
+          {Header("Expense by Category", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
+          <div className="report-filter-row">
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+          </div>
+          {(function(){
+            var bycat = (d.rows||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{});
+            var total = Object.values(bycat).reduce(function(a,b){return a+b;},0);
+            return (<>
+              {Table(["Category","Amount","% of Total"],
+                Object.entries(bycat).sort(function(a,b){return b[1]-a[1];}).map(function(c){
+                  return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td><td>{total>0?Math.round(c[1]/total*100):0}%</td></tr>;
+                })
+              )}
+              <div className="report-totals">Total Expenses: <b>{fmtRupee(total)}</b> across {(d.rows||[]).length} transactions</div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 5. Corpus Register */}
+        {id==="corpus_register" && (<>
+          {Header("Corpus Fund Register","All 30 flats")}
+          {(function(){
+            var paidFlats = (d.rows||[]).map(function(r){return r.flat_id;});
+            var unpaid = props.flatsList.filter(function(f){return paidFlats.indexOf(f)===-1;});
+            return (<>
+              {Table(["Flat","Date Paid","Mode","Amount"],
+                (d.rows||[]).map(function(r){return <tr key={r.id}><td>{r.flat_id}</td><td>{r.paid_date||"—"}</td><td>{r.mode||"—"}</td><td>{fmtRupee(r.amount)}</td></tr>;})
+                  .concat(unpaid.map(function(f){return <tr key={f} style={{opacity:.5}}><td>{f}</td><td colSpan="2">Not Paid</td><td>—</td></tr>;}))
+              )}
+              <div className="report-totals">
+                Total Collected: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+r.amount;},0))}</b> ·
+                Paid: {(d.rows||[]).length}/30 flats
+              </div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 6. FD Register */}
+        {id==="fd_register" && (<>
+          {Header("Fixed Deposit Register")}
+          {Table(["Account No","Invested","Invested Date","Matured","Maturity Date","Interest","Status"],
+            (d.rows||[]).map(function(f){
+              return <tr key={f.id}>
+                <td style={{fontFamily:"monospace"}}>{f.account_no}</td>
+                <td>{fmtRupee(f.invested_amount)}</td><td>{f.invested_date}</td>
+                <td>{f.matured_amount?fmtRupee(f.matured_amount):"—"}</td><td>{f.matured_date||"—"}</td>
+                <td style={{color:"var(--green)"}}>{f.matured_amount?fmtRupee(f.matured_amount-f.invested_amount):"—"}</td>
+                <td>{f.status}</td>
+              </tr>;
+            })
+          )}
+          <div className="report-totals">
+            Total Invested: <b>{fmtRupee((d.rows||[]).reduce(function(s,f){return s+f.invested_amount;},0))}</b> ·
+            Total Matured: <b>{fmtRupee((d.rows||[]).filter(function(f){return f.matured_amount;}).reduce(function(s,f){return s+f.matured_amount;},0))}</b>
+          </div>
+        </>)}
+
+        {/* 7. Flat-wise Ledger */}
+        {id==="flat_ledger" && (<>
+          {Header("Flat-wise Ledger", props.filters.flatId?"Flat "+props.filters.flatId:"Select a flat")}
+          <div className="report-filter-row">
+            <select className="form-input" value={props.filters.flatId} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{flatId:e.target.value});});}}>
+              <option value="">Select Flat</option>
+              {props.flatsList.map(function(f){return <option key={f} value={f}>{f}</option>;})}
+            </select>
+            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Load</button>
+          </div>
+          {props.filters.flatId && (<>
+            <div className="report-section-title">Bills</div>
+            {Table(["Month","Amount","Status","Arrears"],
+              (d.bills||[]).map(function(b){return <tr key={b.billing_month}><td>{monthLabel(b.billing_month)}</td><td>{fmtRupee(b.total_amount)}</td><td style={{color:b.status==="paid"?"var(--green)":"var(--red)"}}>{b.status}</td><td>{b.arrears?fmtRupee(b.arrears):"—"}</td></tr>;})
+            )}
+            <div className="report-section-title" style={{marginTop:16}}>Payments</div>
+            {Table(["Date","Month","Amount","Mode"],
+              (d.payments||[]).map(function(p,i){return <tr key={p.id||i}><td>{p.payment_date}</td><td>{monthLabel(p.billing_month)}</td><td>{fmtRupee(p.amount_paid)}</td><td>{p.mode}</td></tr>;})
+            )}
+            <div className="report-totals">
+              Total Paid: <b>{fmtRupee((d.payments||[]).reduce(function(s,p){return s+p.amount_paid;},0))}</b> ·
+              Total Outstanding: <b style={{color:"var(--red)"}}>{fmtRupee((d.bills||[]).filter(function(b){return b.status==="overdue";}).reduce(function(s,b){return s+(b.arrears||0);},0))}</b>
+            </div>
+          </>)}
+        </>)}
+
+        {/* 8. Defaulter List */}
+        {id==="defaulter_list" && (<>
+          {Header("Defaulter / Dues Report","All flats with outstanding dues")}
+          {(function(){
+            var byFlat = {};
+            (d.rows||[]).forEach(function(r){
+              if(!byFlat[r.flat_id]) byFlat[r.flat_id]={months:[],total:0};
+              byFlat[r.flat_id].months.push(r.billing_month);
+              byFlat[r.flat_id].total += r.arrears;
+            });
+            var sorted = Object.entries(byFlat).sort(function(a,b){return b[1].total-a[1].total;});
+            return (<>
+              {Table(["Flat","Months Unpaid","Amount"],
+                sorted.map(function(s){return <tr key={s[0]}><td>{s[0]}</td><td>{s[1].months.length} ({s[1].months.map(monthLabel).join(", ")})</td><td style={{color:"var(--red)"}}>{fmtRupee(s[1].total)}</td></tr>;})
+              )}
+              <div className="report-totals">
+                Total Outstanding: <b style={{color:"var(--red)"}}>{fmtRupee(sorted.reduce(function(s,x){return s+x[1].total;},0))}</b> ·
+                {sorted.length} flats in default
+              </div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 9. Ageing Report */}
+        {id==="ageing_report" && (<>
+          {Header("Arrear Ageing Report","Days overdue based on due date")}
+          {(function(){
+            var today = new Date();
+            var buckets = {"0-30":0,"31-60":0,"61-90":0,"90+":0};
+            var bucketRows = {"0-30":[],"31-60":[],"61-90":[],"90+":[]};
+            (d.rows||[]).forEach(function(r){
+              var bm = r.billing_month;
+              var y=parseInt(bm.slice(0,4)),m=parseInt(bm.slice(5,7));
+              var dueDate = new Date(y,m,10); // due 10th of following month
+              var days = Math.floor((today-dueDate)/(1000*60*60*24));
+              var bucket = days<=30?"0-30":days<=60?"31-60":days<=90?"61-90":"90+";
+              buckets[bucket]+=r.arrears;
+              bucketRows[bucket].push(r);
+            });
+            return (<>
+              {Table(["Ageing Bucket","Flats","Amount"],
+                Object.keys(buckets).map(function(b){return <tr key={b}><td>{b} days</td><td>{bucketRows[b].length}</td><td style={{color:"var(--red)"}}>{fmtRupee(buckets[b])}</td></tr>;})
+              )}
+              <div className="report-totals">Total: <b style={{color:"var(--red)"}}>{fmtRupee(Object.values(buckets).reduce(function(a,b){return a+b;},0))}</b></div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 10. Payment Mode Summary */}
+        {id==="payment_mode" && (<>
+          {Header("Payment Mode Summary", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
+          <div className="report-filter-row">
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+          </div>
+          {(function(){
+            var byMode = (d.rows||[]).reduce(function(acc,p){acc[p.mode]=(acc[p.mode]||0)+p.amount_paid;return acc;},{});
+            var counts = (d.rows||[]).reduce(function(acc,p){acc[p.mode]=(acc[p.mode]||0)+1;return acc;},{});
+            return (<>
+              {Table(["Mode","Transactions","Amount"],
+                Object.entries(byMode).sort(function(a,b){return b[1]-a[1];}).map(function(m){return <tr key={m[0]}><td>{m[0]}</td><td>{counts[m[0]]}</td><td>{fmtRupee(m[1])}</td></tr>;})
+              )}
+              <div className="report-totals">Total: <b>{fmtRupee(Object.values(byMode).reduce(function(a,b){return a+b;},0))}</b> across {(d.rows||[]).length} transactions</div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 11. Advance Payment Report */}
+        {id==="advance_payment" && (<>
+          {Header("Advance Payment Report","Flats paid for future months")}
+          {(function(){
+            var byFlat = {};
+            (d.rows||[]).forEach(function(b){
+              if(!byFlat[b.flat_id]) byFlat[b.flat_id]={months:[],total:0};
+              byFlat[b.flat_id].months.push(b.billing_month);
+              byFlat[b.flat_id].total += b.total_amount;
+            });
+            var sorted = Object.entries(byFlat).sort(function(a,b){return b[1].months.length-a[1].months.length;});
+            return (<>
+              {Table(["Flat","Months Pre-Paid","Amount"],
+                sorted.map(function(s){return <tr key={s[0]}><td>{s[0]}</td><td>{s[1].months.length} ({s[1].months.sort().map(monthLabel).join(", ")})</td><td style={{color:"var(--green)"}}>{fmtRupee(s[1].total)}</td></tr>;})
+              )}
+              {sorted.length===0&&<div className="empty"><div className="empty-icon">⏩</div><div>No advance payments found</div></div>}
+              <div className="report-totals">Total Advance: <b style={{color:"var(--green)"}}>{fmtRupee(sorted.reduce(function(s,x){return s+x[1].total;},0))}</b></div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 12. AGM Report */}
+        {id==="agm_report" && (<>
+          {Header("Annual General Report","Full financial summary")}
+          {(function(){
+            var totalMaint = (d.payments||[]).reduce(function(s,p){return s+p.amount_paid;},0);
+            var totalExp = (d.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
+            var totalOverdue = (d.overdue||[]).reduce(function(s,o){return s+o.arrears;},0);
+            return (<>
+              {Table(["Metric","Value"],[
+                <tr key="1"><td>Total Maintenance Collected (all-time)</td><td>{fmtRupee(totalMaint)}</td></tr>,
+                <tr key="2"><td>Total Expenses (all-time)</td><td>{fmtRupee(totalExp)}</td></tr>,
+                <tr key="3"><td>Current Net Bank Balance</td><td>{fmtRupee(d.balance?.net_bank_balance)}</td></tr>,
+                <tr key="4"><td>Active FD Investment</td><td>{fmtRupee(d.balance?.active_fd_amount)}</td></tr>,
+                <tr key="5"><td>Total Outstanding Dues</td><td style={{color:"var(--red)"}}>{fmtRupee(totalOverdue)}</td></tr>,
+                <tr key="6"><td>Flats in Default</td><td>{new Set((d.overdue||[]).map(function(o){return o.flat_id;})).size} of 30</td></tr>,
+                <tr key="7"><td>Total Payment Transactions</td><td>{(d.payments||[]).length}</td></tr>,
+                <tr key="8"><td>Total Expense Transactions</td><td>{(d.expenses||[]).length}</td></tr>,
+              ])}
+            </>);
+          })()}
+        </>)}
+
+        {/* 13. Salary Register */}
+        {id==="salary_register" && (<>
+          {Header("Staff Salary Register",monthLabel(getCurrentMonth()))}
+          {Table(["Name","Role","Monthly Salary","Status"],
+            (d.rows||[]).map(function(e){return <tr key={e.id}><td>{e.name}</td><td>{e.role||"—"}</td><td>{fmtRupee(e.salary)}</td><td>{e.active?"Active":"Inactive"}</td></tr>;})
+          )}
+          <div className="report-totals">Total Monthly Payroll: <b>{fmtRupee((d.rows||[]).filter(function(e){return e.active;}).reduce(function(s,e){return s+e.salary;},0))}</b></div>
+        </>)}
+
+        {/* 14. Slab History */}
+        {id==="slab_history" && (<>
+          {Header("Maintenance Slab History")}
+          {Table(["Period","1 BHK","2 BHK","3 BHK"],
+            (d.rows||[]).map(function(s){return <tr key={s.id}><td>{monthLabel(s.start_month)} — {s.end_month?monthLabel(s.end_month):"Present"}</td><td>{fmtRupee(s.charge_1bhk)}</td><td>{fmtRupee(s.charge_2bhk)}</td><td>{fmtRupee(s.charge_3bhk)}</td></tr>;})
+          )}
+        </>)}
+
+        {/* 15. EB Summary */}
+        {id==="eb_summary" && (<>
+          {Header("EB / Utility Summary","Block-wise electricity service numbers")}
+          {Table(["Block","EB Service Number","Notes"],
+            (d.rows||[]).map(function(e){return <tr key={e.id}><td>{e.block_name}</td><td style={{fontFamily:"monospace"}}>{e.service_no}</td><td>{e.notes||"—"}</td></tr>;})
+          )}
+        </>)}
+
+      </div>
+    </div>
   );
 }
