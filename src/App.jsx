@@ -81,9 +81,12 @@ function LoginScreen(props) {
         props.onLogin({user:{id:r.data.id},temp:true,profile:{role:"admin",name:r.data.name,flat_id:r.data.flat_id,id:r.data.id,is_super_admin:r.data.admin_group[0].is_super_admin}});
         return;
       }
-      // Fallback hardcoded admin
-      if ((phone==="admin"||phone==="9999999999") && password==="Admin@2024") {
-        props.onLogin({user:{id:"temp-admin"},temp:true,profile:{role:"admin",name:"Committee Admin",flat_id:null,id:"temp-admin",is_super_admin:true}});
+      // Super admin account — credentials stored in DB, changeable
+      var sa = await supabase.from("super_admin_credentials").select("*").eq("id",1).single();
+      var defaultUser = sa.data ? sa.data.username : "admin";
+      var defaultPass = sa.data ? sa.data.password_hash : "Admin@2024";
+      if (phone===defaultUser && password===defaultPass) {
+        props.onLogin({user:{id:"super-admin"},temp:true,profile:{role:"admin",name:"Committee Admin (Super Admin)",flat_id:null,id:"super-admin",is_super_admin:true}});
         return;
       }
       setErr("Admin account not found or not authorised"); setBusy(false); return;
@@ -206,7 +209,7 @@ function LoginScreen(props) {
           {(loginRole==="owner"||loginRole==="tenant")&&flatId&&resUsers===null&&(
             <button className="btn btn-secondary mt10" onClick={function(){setScreen("register");setRegData(function(p){return Object.assign({},p,{flatId:flatId,role:loginRole});});setErr("");}}>📝 Register New Account</button>
           )}
-          {loginRole==="admin"&&(<div style={{marginTop:16,padding:"10px 12px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)"}}>Default admin: <b>admin</b> / <b>Admin@2024</b></div>)}
+          {loginRole==="admin"&&(<div style={{marginTop:16,padding:"10px 12px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)"}}>First-time admin login: <b>admin</b> / <b>Admin@2024</b> — change password after logging in</div>)}
         </>)}
       </div>
       <div style={{color:"rgba(255,255,255,.2)",fontSize:11,marginTop:18,textAlign:"center"}}>Antony Pallazo · Committee Management</div>
@@ -888,27 +891,36 @@ function AdminChangePasswordModal(props) {
   var [form, setForm] = useState({current:"",next:"",confirm:""});
   var [err, setErr]   = useState("");
   var [saving, setSaving] = useState(false);
-  var isHardcoded = props.profile && (props.profile.id==="temp-admin");
+  var isSuperAdmin = props.profile && (props.profile.id==="super-admin");
 
   async function save() {
     setErr("");
     if (!form.current||!form.next||!form.confirm) { setErr("Fill all fields"); return; }
     if (form.next !== form.confirm) { setErr("New passwords don't match"); return; }
     if (form.next.length < 6) { setErr("Password must be at least 6 characters"); return; }
+    setSaving(true);
 
-    if (isHardcoded) {
-      setErr("Default admin password cannot be changed here. Register as a resident owner and get promoted to Admin to use a personal password.");
+    if (isSuperAdmin) {
+      // Verify against super_admin_credentials table
+      var sa = await supabase.from("super_admin_credentials").select("*").eq("id",1).single();
+      var curPass = sa.data ? sa.data.password_hash : "Admin@2024";
+      if (form.current !== curPass) { setErr("Current password is incorrect"); setSaving(false); return; }
+      var upd = await supabase.from("super_admin_credentials").upsert({id:1, username:"admin", password_hash:form.next});
+      setSaving(false);
+      if (upd.error) { setErr(upd.error.message); return; }
+      props.showToast("✅ Admin password changed! Use the new password next time you login.");
+      props.onClose();
       return;
     }
 
-    setSaving(true);
+    // Regular resident-based admin
     var check = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
     if (check.error || check.data.password_hash !== form.current) {
       setErr("Current password is incorrect"); setSaving(false); return;
     }
-    var upd = await supabase.from("resident_users").update({password_hash:form.next}).eq("id",props.profile.id);
+    var upd2 = await supabase.from("resident_users").update({password_hash:form.next}).eq("id",props.profile.id);
     setSaving(false);
-    if (upd.error) { setErr(upd.error.message); return; }
+    if (upd2.error) { setErr(upd2.error.message); return; }
     props.showToast("✅ Password changed successfully!");
     props.onClose();
   }
@@ -922,28 +934,25 @@ function AdminChangePasswordModal(props) {
           <button className="close-btn" onClick={props.onClose}>✕</button>
         </div>
         <div className="sheet-body">
-          {isHardcoded ? (
-            <div style={{background:"#FFF9E6",borderRadius:10,padding:"12px 14px",fontSize:13,color:"#7A5C00",lineHeight:1.7}}>
-              ℹ️ You're using the default admin account. To set a personal password, register as a Resident Owner and have another admin promote you to Admin in <b>Approvals → Users</b>.
+          {isSuperAdmin && (
+            <div style={{background:"#FFF9E6",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:"#7A5C00",lineHeight:1.6}}>
+              ⚠️ This is the shared super-admin account. Changing this password affects everyone who logs in as <b>admin</b>. Make sure to share the new password with other committee members who need it.
             </div>
-          ) : (
-            <>
-              <div className="form-group"><label className="form-label">Current Password *</label>
-                <input className="form-input" type="password" value={form.current}
-                  onChange={function(e){setForm(function(p){return Object.assign({},p,{current:e.target.value});});setErr("");}}/>
-              </div>
-              <div className="form-group"><label className="form-label">New Password * (min 6 chars)</label>
-                <input className="form-input" type="password" value={form.next}
-                  onChange={function(e){setForm(function(p){return Object.assign({},p,{next:e.target.value});});setErr("");}}/>
-              </div>
-              <div className="form-group"><label className="form-label">Confirm New Password *</label>
-                <input className="form-input" type="password" value={form.confirm}
-                  onChange={function(e){setForm(function(p){return Object.assign({},p,{confirm:e.target.value});});setErr("");}}/>
-              </div>
-              {err && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {err}</div>}
-              <button className="btn btn-success" onClick={save} disabled={saving}>{saving?<span className="spinner"/>:"✅ Update Password"}</button>
-            </>
           )}
+          <div className="form-group"><label className="form-label">Current Password *</label>
+            <input className="form-input" type="password" value={form.current}
+              onChange={function(e){setForm(function(p){return Object.assign({},p,{current:e.target.value});});setErr("");}}/>
+          </div>
+          <div className="form-group"><label className="form-label">New Password * (min 6 chars)</label>
+            <input className="form-input" type="password" value={form.next}
+              onChange={function(e){setForm(function(p){return Object.assign({},p,{next:e.target.value});});setErr("");}}/>
+          </div>
+          <div className="form-group"><label className="form-label">Confirm New Password *</label>
+            <input className="form-input" type="password" value={form.confirm}
+              onChange={function(e){setForm(function(p){return Object.assign({},p,{confirm:e.target.value});});setErr("");}}/>
+          </div>
+          {err && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {err}</div>}
+          <button className="btn btn-success" onClick={save} disabled={saving}>{saving?<span className="spinner"/>:"✅ Update Password"}</button>
           <button className="btn btn-secondary mt10" onClick={props.onClose}>Close</button>
         </div>
       </div>
