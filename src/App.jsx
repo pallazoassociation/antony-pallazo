@@ -261,6 +261,7 @@ export default function App() {
   var [session, setSession] = useState(null);
   var [userProfile, setUserProfile] = useState(null);
   var [appLoading, setAppLoading] = useState(true);
+  var [showAdminPass, setShowAdminPass] = useState(false);
   var [dataLoading, setDataLoading] = useState(false);
   var [tab, setTab] = useState("home");
   var [flats,            setFlats]            = useState([]);
@@ -623,6 +624,7 @@ export default function App() {
           </div>
         </div>
         <div className="hdr-btns">
+          <button className="icon-btn" onClick={function(){setShowAdminPass(true);}} title="Change Password">🔒</button>
           <button className="icon-btn" onClick={function(){showToast("🔔 Coming soon");}}>🔔</button>
           <button className="icon-btn" onClick={handleLogout} title="Logout">🚪</button>
         </div>
@@ -869,7 +871,82 @@ export default function App() {
         </div>
       )}
 
+      {showAdminPass && (
+        <AdminChangePasswordModal
+          profile={userProfile}
+          onClose={function(){setShowAdminPass(false);}}
+          showToast={showToast}/>
+      )}
+
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+// ── AdminChangePasswordModal ─────────────────────────────────────
+function AdminChangePasswordModal(props) {
+  var [form, setForm] = useState({current:"",next:"",confirm:""});
+  var [err, setErr]   = useState("");
+  var [saving, setSaving] = useState(false);
+  var isHardcoded = props.profile && (props.profile.id==="temp-admin");
+
+  async function save() {
+    setErr("");
+    if (!form.current||!form.next||!form.confirm) { setErr("Fill all fields"); return; }
+    if (form.next !== form.confirm) { setErr("New passwords don't match"); return; }
+    if (form.next.length < 6) { setErr("Password must be at least 6 characters"); return; }
+
+    if (isHardcoded) {
+      setErr("Default admin password cannot be changed here. Register as a resident owner and get promoted to Admin to use a personal password.");
+      return;
+    }
+
+    setSaving(true);
+    var check = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
+    if (check.error || check.data.password_hash !== form.current) {
+      setErr("Current password is incorrect"); setSaving(false); return;
+    }
+    var upd = await supabase.from("resident_users").update({password_hash:form.next}).eq("id",props.profile.id);
+    setSaving(false);
+    if (upd.error) { setErr(upd.error.message); return; }
+    props.showToast("✅ Password changed successfully!");
+    props.onClose();
+  }
+
+  return (
+    <div className="overlay" onClick={props.onClose}>
+      <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+        <div className="sheet-handle"/>
+        <div className="sheet-head">
+          <div><div className="sheet-title">Change Password</div><div className="sheet-sub">{props.profile?.name}</div></div>
+          <button className="close-btn" onClick={props.onClose}>✕</button>
+        </div>
+        <div className="sheet-body">
+          {isHardcoded ? (
+            <div style={{background:"#FFF9E6",borderRadius:10,padding:"12px 14px",fontSize:13,color:"#7A5C00",lineHeight:1.7}}>
+              ℹ️ You're using the default admin account. To set a personal password, register as a Resident Owner and have another admin promote you to Admin in <b>Approvals → Users</b>.
+            </div>
+          ) : (
+            <>
+              <div className="form-group"><label className="form-label">Current Password *</label>
+                <input className="form-input" type="password" value={form.current}
+                  onChange={function(e){setForm(function(p){return Object.assign({},p,{current:e.target.value});});setErr("");}}/>
+              </div>
+              <div className="form-group"><label className="form-label">New Password * (min 6 chars)</label>
+                <input className="form-input" type="password" value={form.next}
+                  onChange={function(e){setForm(function(p){return Object.assign({},p,{next:e.target.value});});setErr("");}}/>
+              </div>
+              <div className="form-group"><label className="form-label">Confirm New Password *</label>
+                <input className="form-input" type="password" value={form.confirm}
+                  onChange={function(e){setForm(function(p){return Object.assign({},p,{confirm:e.target.value});});setErr("");}}/>
+              </div>
+              {err && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {err}</div>}
+              <button className="btn btn-success" onClick={save} disabled={saving}>{saving?<span className="spinner"/>:"✅ Update Password"}</button>
+            </>
+          )}
+          <button className="btn btn-secondary mt10" onClick={props.onClose}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1859,7 +1936,29 @@ function ResidentPortal(props) {
   var [toast, setToast] = useState(null);
   var [notifications, setNotifications] = useState([]);
   var [file, setFile] = useState(null);
+  var [showChangePass, setShowChangePass] = useState(false);
+  var [passForm, setPassForm] = useState({current:"",next:"",confirm:""});
+  var [passSaving, setPassSaving] = useState(false);
+  var [passErr, setPassErr] = useState("");
   var flatId = props.profile.flat_id;
+
+  async function changePassword() {
+    setPassErr("");
+    if (!passForm.current||!passForm.next||!passForm.confirm) { setPassErr("Fill all fields"); return; }
+    if (passForm.next !== passForm.confirm) { setPassErr("New passwords don't match"); return; }
+    if (passForm.next.length < 6) { setPassErr("Password must be at least 6 characters"); return; }
+    setPassSaving(true);
+    var check = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
+    if (check.error || check.data.password_hash !== passForm.current) {
+      setPassErr("Current password is incorrect"); setPassSaving(false); return;
+    }
+    var upd = await supabase.from("resident_users").update({password_hash:passForm.next}).eq("id",props.profile.id);
+    setPassSaving(false);
+    if (upd.error) { setPassErr(upd.error.message); return; }
+    showToast("✅ Password changed successfully!");
+    setShowChangePass(false);
+    setPassForm({current:"",next:"",confirm:""});
+  }
 
   function showToast(msg){ setToast(msg); setTimeout(function(){setToast(null);},2800); }
 
@@ -1934,6 +2033,7 @@ function ResidentPortal(props) {
             <div><div style={{color:"#FFF",fontWeight:700,fontSize:15}}>Flat {flatId}</div><div style={{color:"rgba(255,255,255,.45)",fontSize:10,textTransform:"uppercase",letterSpacing:1}}>{props.profile.name} · {props.profile.role}</div></div>
           </div>
           <div style={{display:"flex",gap:8}}>
+            <button style={{width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={function(){setShowChangePass(true);}}>🔒</button>
             <button style={{position:"relative",width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={function(){setTab("notifications");}}>
               🔔{unreadNotif>0&&<span style={{position:"absolute",top:4,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:8,fontWeight:700,padding:"1px 4px"}}>{unreadNotif}</span>}
             </button>
@@ -2077,6 +2177,36 @@ function ResidentPortal(props) {
           </div>
         )}
         {toast&&<div className="toast">{toast}</div>}
+
+        {/* Change Password modal */}
+        {showChangePass && (
+          <div className="overlay" onClick={function(){setShowChangePass(false);setPassErr("");setPassForm({current:"",next:"",confirm:""});}}>
+            <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+              <div className="sheet-handle"/>
+              <div className="sheet-head">
+                <div><div className="sheet-title">Change Password</div><div className="sheet-sub">Flat {flatId} · {props.profile.name}</div></div>
+                <button className="close-btn" onClick={function(){setShowChangePass(false);setPassErr("");setPassForm({current:"",next:"",confirm:""});}}>✕</button>
+              </div>
+              <div className="sheet-body">
+                <div className="form-group"><label className="form-label">Current Password *</label>
+                  <input className="form-input" type="password" value={passForm.current}
+                    onChange={function(e){setPassForm(function(p){return Object.assign({},p,{current:e.target.value});});setPassErr("");}}/>
+                </div>
+                <div className="form-group"><label className="form-label">New Password * (min 6 chars)</label>
+                  <input className="form-input" type="password" value={passForm.next}
+                    onChange={function(e){setPassForm(function(p){return Object.assign({},p,{next:e.target.value});});setPassErr("");}}/>
+                </div>
+                <div className="form-group"><label className="form-label">Confirm New Password *</label>
+                  <input className="form-input" type="password" value={passForm.confirm}
+                    onChange={function(e){setPassForm(function(p){return Object.assign({},p,{confirm:e.target.value});});setPassErr("");}}/>
+                </div>
+                {passErr && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {passErr}</div>}
+                <button className="btn btn-success" onClick={changePassword} disabled={passSaving}>{passSaving?<span className="spinner"/>:"✅ Update Password"}</button>
+                <button className="btn btn-secondary mt10" onClick={function(){setShowChangePass(false);setPassErr("");setPassForm({current:"",next:"",confirm:""});}}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
