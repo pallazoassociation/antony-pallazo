@@ -43,26 +43,124 @@ function buildMonthList() {
 }
 var ALL_MONTHS = buildMonthList();
 
-var PINS = { admin: { pin:"2024", role:"admin", name:"Committee Admin" }, staff: { pin:"1234", role:"staff", name:"Staff User" } };
+var ALL_FLAT_IDS = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
 function LoginScreen(props) {
-  var [uname, setUname] = useState("");
-  var [pin, setPin] = useState("");
-  var [err, setErr] = useState("");
-  var [busy, setBusy] = useState(false);
-  var [show, setShow] = useState(false);
+  var [loginRole, setLoginRole] = useState("");
+  var [flatId,    setFlatId]    = useState("");
+  var [phone,     setPhone]     = useState("");
+  var [password,  setPassword]  = useState("");
+  var [showPass,  setShowPass]  = useState(false);
+  var [err,       setErr]       = useState("");
+  var [busy,      setBusy]      = useState(false);
+  var [screen,    setScreen]    = useState("login");
+  var [resUsers,  setResUsers]  = useState(null);
+  var [regData,   setRegData]   = useState({name:"",phone:"",password:"",confirmPass:"",role:"owner",flatId:""});
+  var [regDone,   setRegDone]   = useState(false);
 
-  function doLogin() {
-    setErr("");
-    var u = uname.trim().toLowerCase();
-    var found = PINS[u];
-    if (!found) { setErr("Username not found"); return; }
-    if (pin !== found.pin) { setErr("Incorrect PIN"); return; }
-    setBusy(true);
-    setTimeout(function() {
-      props.onLogin({ user: { id: "temp-"+u }, temp: true, profile: Object.assign({}, found, { id: "temp-"+u }) });
-    }, 500);
+  useEffect(function() {
+    if ((loginRole==="owner"||loginRole==="tenant") && flatId) {
+      supabase.from("resident_users")
+        .select("*").eq("flat_id",flatId).eq("role",loginRole).eq("status","active")
+        .then(function(r) {
+          if (r.data && r.data.length > 0) {
+            setResUsers(r.data);
+            if (r.data.length===1) setPhone(r.data[0].phone);
+          } else { setResUsers(null); setPhone(""); }
+        });
+    } else { setResUsers(null); setPhone(""); }
+  }, [loginRole, flatId]);
+
+  async function doLogin() {
+    setErr(""); setBusy(true);
+    if (loginRole==="admin") {
+      // Try resident admin group first
+      var r = await supabase.from("resident_users").select("*,admin_group(*)").eq("phone",phone).eq("status","active").single();
+      if (!r.error && r.data && r.data.admin_group && r.data.admin_group.length>0) {
+        if (r.data.password_hash!==password) { setErr("Incorrect password"); setBusy(false); return; }
+        props.onLogin({user:{id:r.data.id},temp:true,profile:{role:"admin",name:r.data.name,flat_id:r.data.flat_id,id:r.data.id,is_super_admin:r.data.admin_group[0].is_super_admin}});
+        return;
+      }
+      // Fallback hardcoded admin
+      if ((phone==="admin"||phone==="9999999999") && password==="Admin@2024") {
+        props.onLogin({user:{id:"temp-admin"},temp:true,profile:{role:"admin",name:"Committee Admin",flat_id:null,id:"temp-admin",is_super_admin:true}});
+        return;
+      }
+      setErr("Admin account not found or not authorised"); setBusy(false); return;
+    }
+    if (!flatId||!loginRole) { setErr("Select role and flat"); setBusy(false); return; }
+    if (!phone||!password)   { setErr("Enter phone and password"); setBusy(false); return; }
+    var r2 = await supabase.from("resident_users").select("*").eq("flat_id",flatId).eq("phone",phone).eq("status","active").single();
+    if (r2.error||!r2.data) { setErr("Account not found. Please register."); setBusy(false); return; }
+    if (r2.data.password_hash!==password) { setErr("Incorrect password"); setBusy(false); return; }
+    props.onLogin({user:{id:r2.data.id},temp:true,profile:{role:r2.data.role,name:r2.data.name,flat_id:flatId,id:r2.data.id}});
   }
+
+  async function doRegister() {
+    setErr("");
+    if (!regData.name||!regData.phone||!regData.password||!regData.flatId||!regData.role) { setErr("All fields required"); return; }
+    if (regData.password!==regData.confirmPass) { setErr("Passwords don't match"); return; }
+    if (regData.password.length<6) { setErr("Password must be at least 6 characters"); return; }
+    setBusy(true);
+    var chk = await supabase.from("resident_users").select("id").eq("phone",regData.phone).single();
+    if (!chk.error) { setErr("Mobile number already registered"); setBusy(false); return; }
+    var chk2 = await supabase.from("registration_requests").select("id").eq("phone",regData.phone).eq("status","pending").single();
+    if (!chk2.error) { setErr("Registration already pending for this number"); setBusy(false); return; }
+    var res = await supabase.from("registration_requests").insert({flat_id:regData.flatId,name:regData.name.trim(),phone:regData.phone.trim(),password_hash:regData.password,role:regData.role});
+    if (res.error) { setErr(res.error.message); setBusy(false); return; }
+    await supabase.from("notifications").insert({user_id:null,type:"registration_request",title:"New Registration Request",body:regData.name+" (Flat "+regData.flatId+") wants to join as "+regData.role,data:{flat_id:regData.flatId,role:regData.role,phone:regData.phone,name:regData.name}});
+    setBusy(false); setRegDone(true);
+  }
+
+  if (regDone) return (
+    <div className="login-wrap">
+      <div className="login-logo">✅</div>
+      <div className="login-title">Request Submitted!</div>
+      <div className="login-sub">Waiting for approval</div>
+      <div className="login-card" style={{textAlign:"center"}}>
+        <div style={{fontSize:36,marginBottom:12}}>⏳</div>
+        <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>Pending Approval</div>
+        <div style={{fontSize:13,color:"var(--muted)",lineHeight:1.7,marginBottom:20}}>Your request has been sent to the Admin{regData.role==="tenant"?" and the Flat Owner":""} for review.</div>
+        <button className="btn btn-primary" onClick={function(){setRegDone(false);setScreen("login");setRegData({name:"",phone:"",password:"",confirmPass:"",role:"owner",flatId:""});}}>← Back to Login</button>
+      </div>
+    </div>
+  );
+
+  if (screen==="register") return (
+    <div className="login-wrap" style={{paddingTop:28,justifyContent:"flex-start",overflowY:"auto",minHeight:"100vh"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18,width:"100%",maxWidth:400}}>
+        <div className="login-logo" style={{width:42,height:42,fontSize:20,flexShrink:0}}>🏛</div>
+        <div><div style={{color:"#FFF",fontSize:16,fontWeight:700}}>Antony Pallazo</div><div style={{color:"rgba(255,255,255,.5)",fontSize:11}}>New Resident Registration</div></div>
+      </div>
+      <div className="login-card" style={{width:"100%",maxWidth:400}}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>Create Account</div>
+        <div style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>Submit your details for admin approval</div>
+        <div className="form-group"><label className="form-label">Full Name *</label><input className="form-input" placeholder="Your full name" value={regData.name} onChange={function(e){setRegData(function(p){return Object.assign({},p,{name:e.target.value});});}}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div className="form-group"><label className="form-label">Flat No *</label>
+            <select className="form-input" value={regData.flatId} onChange={function(e){setRegData(function(p){return Object.assign({},p,{flatId:e.target.value});});}}>
+              <option value="">Select</option>{ALL_FLAT_IDS.map(function(f){return <option key={f} value={f}>{f}</option>;})}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Role *</label>
+            <select className="form-input" value={regData.role} onChange={function(e){setRegData(function(p){return Object.assign({},p,{role:e.target.value});});}}>
+              <option value="owner">Owner</option><option value="tenant">Tenant</option>
+            </select>
+          </div>
+        </div>
+        <div className="form-group"><label className="form-label">Mobile Number * (used as username)</label><input className="form-input" type="tel" placeholder="10-digit mobile" maxLength={10} value={regData.phone} onChange={function(e){setRegData(function(p){return Object.assign({},p,{phone:e.target.value.replace(/\D/g,"")});});}}/></div>
+        <div className="form-group"><label className="form-label">Password * (min 6 chars)</label><input className="form-input" type="password" placeholder="Letters + numbers" value={regData.password} onChange={function(e){setRegData(function(p){return Object.assign({},p,{password:e.target.value});});}}/></div>
+        <div className="form-group"><label className="form-label">Confirm Password *</label><input className="form-input" type="password" placeholder="Re-enter password" value={regData.confirmPass} onChange={function(e){setRegData(function(p){return Object.assign({},p,{confirmPass:e.target.value});});}}/></div>
+        <div style={{background:regData.role==="tenant"?"#FFF9E6":"#EEF4FF",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:regData.role==="tenant"?"#7A5C00":"#1A3A7A"}}>
+          {regData.role==="tenant"?"ℹ️ Tenant registration requires approval from the Flat Owner or Admin.":"ℹ️ Owner registration requires approval from Admin."}
+        </div>
+        {err && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {err}</div>}
+        <button className="btn btn-primary" onClick={doRegister} disabled={busy}>{busy?<span className="spinner"/>:"📤 Submit for Approval"}</button>
+        <button className="btn btn-secondary mt10" onClick={function(){setScreen("login");setErr("");}}>← Back to Login</button>
+      </div>
+      <div style={{height:40}}/>
+    </div>
+  );
 
   return (
     <div className="login-wrap">
@@ -70,41 +168,52 @@ function LoginScreen(props) {
       <div className="login-title">Antony Pallazo</div>
       <div className="login-sub">Apartment Management</div>
       <div className="login-card">
-        <div style={{fontSize:16,fontWeight:700,marginBottom:6}}>Welcome back</div>
-        <div style={{fontSize:13,color:"var(--muted)",marginBottom:20,lineHeight:1.5}}>Enter your username and PIN to continue</div>
-        <div className="form-group">
-          <label className="form-label">Username</label>
-          <input className="form-input" type="text" placeholder="e.g. admin" value={uname}
-            onChange={function(e){setUname(e.target.value);setErr("");}}
-            onKeyDown={function(e){if(e.key==="Enter")doLogin();}} autoCapitalize="none"/>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>Welcome back</div>
+        <div className="form-group"><label className="form-label">Login As</label>
+          <select className="form-input" value={loginRole} onChange={function(e){setLoginRole(e.target.value);setFlatId("");setPhone("");setPassword("");setErr("");}}>
+            <option value="">-- Select Role --</option>
+            <option value="admin">🔑 Admin / Committee</option>
+            <option value="owner">🏠 Resident Owner</option>
+            <option value="tenant">👤 Resident Tenant</option>
+          </select>
         </div>
-        <div className="form-group">
-          <label className="form-label">PIN</label>
-          <div style={{position:"relative"}}>
-            <input className="form-input" type={show?"text":"password"} placeholder="Enter PIN"
-              maxLength={6} value={pin}
-              onChange={function(e){setPin(e.target.value.replace(/\D/g,""));setErr("");}}
-              onKeyDown={function(e){if(e.key==="Enter")doLogin();}} style={{paddingRight:42}}/>
-            <button onClick={function(){setShow(function(p){return !p;})}}
-              style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15,color:"var(--muted)"}}>
-              {show?"🙈":"👁"}
-            </button>
+        {(loginRole==="owner"||loginRole==="tenant") && (
+          <div className="form-group"><label className="form-label">Your Flat</label>
+            <select className="form-input" value={flatId} onChange={function(e){setFlatId(e.target.value);setPhone("");setErr("");}}>
+              <option value="">-- Select Flat --</option>
+              {ALL_FLAT_IDS.map(function(f){return <option key={f} value={f}>Flat {f}</option>;})}
+            </select>
           </div>
-        </div>
-        {err && <div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12,fontWeight:500}}>⚠️ {err}</div>}
-        <button className="btn btn-primary" onClick={doLogin} disabled={busy}>
-          {busy?<span className="spinner"/>:"🔓 Login"}
-        </button>
-        <div style={{marginTop:18,padding:"11px 13px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)",lineHeight:1.8}}>
-          <div style={{fontWeight:700,color:"var(--text)",marginBottom:2}}>Credentials:</div>
-          <div>👤 Admin → <b>admin</b> / PIN: <b>2024</b></div>
-          <div>👤 Staff → <b>staff</b> / PIN: <b>1234</b></div>
-        </div>
+        )}
+        {loginRole && (<>
+          <div className="form-group">
+            <label className="form-label">{loginRole==="admin"?"Username / Mobile":"Registered Mobile"}</label>
+            <input className="form-input" type={loginRole==="admin"?"text":"tel"} placeholder={loginRole==="admin"?"admin or mobile":"Auto-filled if registered"}
+              value={phone} readOnly={loginRole!=="admin"&&resUsers&&resUsers.length===1}
+              onChange={function(e){if(loginRole==="admin"||!resUsers||resUsers.length!==1)setPhone(e.target.value.trim());setErr("");}}/>
+            {(loginRole==="owner"||loginRole==="tenant")&&flatId&&resUsers===null&&(<div style={{fontSize:11,color:"var(--red)",marginTop:4}}>⚠️ No {loginRole} registered for Flat {flatId}</div>)}
+          </div>
+          <div className="form-group"><label className="form-label">Password</label>
+            <div style={{position:"relative"}}>
+              <input className="form-input" type={showPass?"text":"password"} placeholder="Enter password"
+                value={password} onChange={function(e){setPassword(e.target.value);setErr("");}}
+                onKeyDown={function(e){if(e.key==="Enter")doLogin();}} style={{paddingRight:42}}/>
+              <button onClick={function(){setShowPass(function(p){return !p;})}} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:15,color:"var(--muted)"}}>{showPass?"🙈":"👁"}</button>
+            </div>
+          </div>
+          {err&&<div style={{background:"#FDEDEC",color:"var(--red)",fontSize:12,padding:"8px 12px",borderRadius:8,marginBottom:12}}>⚠️ {err}</div>}
+          <button className="btn btn-primary" onClick={doLogin} disabled={busy||!loginRole}>{busy?<span className="spinner"/>:"🔓 Login"}</button>
+          {(loginRole==="owner"||loginRole==="tenant")&&flatId&&resUsers===null&&(
+            <button className="btn btn-secondary mt10" onClick={function(){setScreen("register");setRegData(function(p){return Object.assign({},p,{flatId:flatId,role:loginRole});});setErr("");}}>📝 Register New Account</button>
+          )}
+          {loginRole==="admin"&&(<div style={{marginTop:16,padding:"10px 12px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)"}}>Default admin: <b>admin</b> / <b>Admin@2024</b></div>)}
+        </>)}
       </div>
-      <div style={{color:"rgba(255,255,255,.2)",fontSize:11,marginTop:18,textAlign:"center"}}>⚠️ Temporary PIN login · OTP coming soon</div>
+      <div style={{color:"rgba(255,255,255,.2)",fontSize:11,marginTop:18,textAlign:"center"}}>Antony Pallazo · Committee Management</div>
     </div>
   );
 }
+
 
 function LoadingScreen(props) {
   var [secs, setSecs] = useState(0);
@@ -170,6 +279,7 @@ export default function App() {
   var [ebDetails,        setEbDetails]        = useState([]);
   var [employeeDetails,  setEmployeeDetails]  = useState([]);
   var [aptInfo,          setAptInfo]          = useState({});
+  var [pendingCount,     setPendingCount]     = useState(0);
   var [selMonth, setSelMonth] = useState(getCurrentMonth());
   var [selFlat, setSelFlat] = useState(null);
   var [filter, setFilter] = useState("all");
@@ -266,6 +376,10 @@ export default function App() {
         setAcctSettings(settings);
       }
       if (results[9].data) setAllPayments(results[9].data);
+
+      // Pending approvals count
+      var pc = await supabase.from("pending_approvals_summary").select("*").single();
+      if (pc.data) setPendingCount((pc.data.pending_registrations||0)+(pc.data.pending_payments||0));
 
       // Info tables
       var [slabs, ebs, emps, info] = await Promise.all([
@@ -410,6 +524,15 @@ export default function App() {
     else loadUserProfile(s.user.id);
     setSession(s);
   }}/>;
+
+  // ── Resident portal (owner/tenant) — loads own flat data only
+  if (userProfile && (userProfile.role==="owner"||userProfile.role==="tenant")) {
+    return <ResidentPortal profile={userProfile} onLogout={function(){
+      localStorage.removeItem("pallazo_temp_session");
+      setSession(null); setUserProfile(null);
+    }}/>;
+  }
+
   if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots retry={function(){ loadData(); }}/>;
 
   // ── Monthly summary from view (never hits row limits) ─────────
@@ -485,7 +608,8 @@ export default function App() {
     selFlat: selFlat, setSelFlat: setSelFlat,
     loadMonthData: loadMonthData, setMonthlySummaries: setMonthlySummaries,
     maintenanceSlabs, ebDetails, employeeDetails, aptInfo,
-    setMaintenanceSlabs, setEbDetails, setEmployeeDetails, setAptInfo
+    setMaintenanceSlabs, setEbDetails, setEmployeeDetails, setAptInfo,
+    pendingCount
   };
 
   return (
@@ -511,13 +635,17 @@ export default function App() {
         {tab==="income"   && <IncomeTab   {...sharedProps} reload={loadData}/>}
         {tab==="expenses" && <ExpensesTab {...sharedProps} reload={loadData}/>}
         {tab==="info"     && <InfoTab     {...sharedProps} reload={loadData}/>}
+        {tab==="approvals"&& <ApprovalsTab {...sharedProps} reload={loadData}/>}
       </div>
 
       <nav className="tabbar">
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"info",icon:"ℹ️",label:"Info"}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"info",icon:"ℹ️",label:"Info"},{id:"approvals",icon:"✅",label:"Approvals",badge:true}].map(function(t){
           return (
-            <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}}>
+            <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative"}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
+              {t.badge && sharedProps.pendingCount>0 && (
+                <span style={{position:"absolute",top:6,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 5px",minWidth:16,textAlign:"center"}}>{sharedProps.pendingCount}</span>
+              )}
             </button>
           );
         })}
@@ -1710,6 +1838,501 @@ function InfoTab(props) {
               </>}
               <button className="btn btn-success" onClick={saveForm} disabled={saving}>{saving?<span className="spinner"/>:(editing?"✅ Update":"✅ Save")}</button>
               <button className="btn btn-secondary mt10" onClick={function(){setShowForm(false);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── ResidentPortal ─────────────────────────────────────────────
+function ResidentPortal(props) {
+  var [tab, setTab]   = useState("home");
+  var [bills, setBills] = useState([]);
+  var [payments, setPayments] = useState([]);
+  var [submissions, setSubmissions] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [showPayForm, setShowPayForm] = useState(false);
+  var [payForm, setPayForm] = useState({billing_month:"",amount:"",mode:"UPI",reference:"",notes:""});
+  var [saving, setSaving] = useState(false);
+  var [toast, setToast] = useState(null);
+  var [notifications, setNotifications] = useState([]);
+  var [file, setFile] = useState(null);
+  var flatId = props.profile.flat_id;
+
+  function showToast(msg){ setToast(msg); setTimeout(function(){setToast(null);},2800); }
+
+  useEffect(function(){
+    loadResidentData();
+  },[]);
+
+  async function loadResidentData(){
+    setLoading(true);
+    var [b, p, s, n] = await Promise.all([
+      supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
+      supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
+      supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
+      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(20),
+    ]);
+    if(b.data) setBills(b.data);
+    if(p.data) setPayments(p.data);
+    if(s.data) setSubmissions(s.data);
+    if(n.data) setNotifications(n.data);
+    setLoading(false);
+  }
+
+  async function submitPayment(){
+    if(!payForm.billing_month||!payForm.amount||!payForm.mode){ showToast("⚠️ Fill all required fields"); return; }
+    setSaving(true);
+    var screenshotUrl = null;
+    // Upload screenshot if provided
+    if(file){
+      var fname = flatId+"-"+payForm.billing_month+"-"+Date.now()+"."+file.name.split(".").pop();
+      var up = await supabase.storage.from("payment-screenshots").upload(fname, file);
+      if(!up.error){
+        var pub = supabase.storage.from("payment-screenshots").getPublicUrl(fname);
+        screenshotUrl = pub.data.publicUrl;
+      }
+    }
+    var res = await supabase.from("payment_submissions").insert({
+      flat_id:flatId, billing_month:payForm.billing_month,
+      amount:parseInt(payForm.amount), mode:payForm.mode,
+      reference_no:payForm.reference||null, notes:payForm.notes||null,
+      screenshot_url:screenshotUrl, submitted_by:props.profile.id, status:"pending"
+    });
+    if(res.error){ showToast("❌ "+res.error.message); setSaving(false); return; }
+    // Notify all admins
+    await supabase.from("notifications").insert({
+      user_id:null, type:"payment_submission",
+      title:"Payment Submitted",
+      body:"Flat "+flatId+" submitted ₹"+payForm.amount+" for "+monthLabel(payForm.billing_month),
+      data:{flat_id:flatId, billing_month:payForm.billing_month, amount:payForm.amount}
+    });
+    setSaving(false);
+    setShowPayForm(false);
+    setPayForm({billing_month:"",amount:"",mode:"UPI",reference:"",notes:""});
+    setFile(null);
+    showToast("✅ Payment submitted! Awaiting admin approval.");
+    await loadResidentData();
+  }
+
+  var overdueBills = bills.filter(function(b){return b.status==="overdue";});
+  var paidBills    = bills.filter(function(b){return b.status==="paid";});
+  var totalDue     = overdueBills.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
+  var unreadNotif  = notifications.filter(function(n){return !n.is_read;}).length;
+
+  if(loading) return <LoadingScreen msg="Loading your flat details…" dots/>;
+
+  return (
+    <>
+      <style>{"\n.res-portal{max-width:430px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:var(--bg)}\n.res-header{background:linear-gradient(135deg,#1A1410 0%,#2C2018 100%);padding:0 20px;height:64px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}\n.res-tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;height:68px;background:var(--card);border-top:1px solid var(--border);display:flex;align-items:stretch;justify-content:space-around;padding:0 4px 8px;z-index:100}\n"}</style>
+      <div className="res-portal">
+        <header className="res-header">
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:36,height:36,borderRadius:9,background:"linear-gradient(135deg,var(--gold),var(--gold-lt))",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏠</div>
+            <div><div style={{color:"#FFF",fontWeight:700,fontSize:15}}>Flat {flatId}</div><div style={{color:"rgba(255,255,255,.45)",fontSize:10,textTransform:"uppercase",letterSpacing:1}}>{props.profile.name} · {props.profile.role}</div></div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button style={{position:"relative",width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={function(){setTab("notifications");}}>
+              🔔{unreadNotif>0&&<span style={{position:"absolute",top:4,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:8,fontWeight:700,padding:"1px 4px"}}>{unreadNotif}</span>}
+            </button>
+            <button onClick={props.onLogout} style={{width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}}>🚪</button>
+          </div>
+        </header>
+
+        <div style={{flex:1,overflowY:"auto",paddingBottom:76}}>
+          {/* HOME TAB */}
+          {tab==="home" && (<>
+            <div style={{background:"linear-gradient(135deg,#1A1410,#2C2018)",margin:"14px 16px 0",borderRadius:16,padding:"16px 18px"}}>
+              <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:6}}>Your Flat Overview</div>
+              <div style={{color:"#FFF",fontSize:22,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>Flat {flatId}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginTop:12}}>
+                {[["Pending Dues",fmtRupee(totalDue),"var(--red)"],["Months Paid",paidBills.length,"var(--green)"],["Submissions",submissions.filter(function(s){return s.status==="pending";}).length,"var(--gold)"]].map(function(x){
+                  return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:x[2],fontWeight:700,fontSize:18,marginTop:3}}>{x[1]}</div></div>;
+                })}
+              </div>
+            </div>
+
+            {overdueBills.length>0&&(
+              <div style={{margin:"14px 16px 0"}}>
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:8}}>Overdue Months</div>
+                <div className="card">
+                  {overdueBills.map(function(b){
+                    return <div key={b.billing_month} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
+                      <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(b.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Due by 15th</div></div>
+                      <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:"var(--red)"}}>{fmtRupee(b.arrears||b.total_amount)}</div><div className="chip overdue">Overdue</div></div>
+                    </div>;
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div style={{margin:"14px 16px 0"}}>
+              <button className="btn btn-primary" onClick={function(){
+                setPayForm(function(p){return Object.assign({},p,{billing_month:bills.find(function(b){return b.status==="overdue";})?bills.find(function(b){return b.status==="overdue";}).billing_month:getCurrentMonth()});});
+                setShowPayForm(true);
+              }}>💸 Submit Payment</button>
+            </div>
+
+            <div style={{margin:"14px 16px 0"}}>
+              <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:8}}>Recent Activity</div>
+              <div className="card">
+                {submissions.slice(0,5).map(function(s){
+                  return <div key={s.id} style={{padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(s.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{s.mode} · {s.created_at?.slice(0,10)}</div></div>
+                      <div style={{textAlign:"right"}}><div style={{fontWeight:700}}>{fmtRupee(s.amount)}</div>
+                        <div className={"chip "+(s.status==="approved"?"paid":s.status==="rejected"?"overdue":"vacant")} style={{background:s.status==="approved"?"#E8F5EE":s.status==="rejected"?"#FDEDEC":"#F0EDE9",color:s.status==="approved"?"var(--green)":s.status==="rejected"?"var(--red)":"var(--muted)"}}>{s.status}</div>
+                      </div>
+                    </div>
+                    {s.rejection_reason&&<div style={{fontSize:11,color:"var(--red)",marginTop:4}}>Rejected: {s.rejection_reason}</div>}
+                  </div>;
+                })}
+                {submissions.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No submissions yet</div></div>}
+              </div>
+            </div>
+          </>)}
+
+          {/* HISTORY TAB */}
+          {tab==="history" && (<>
+            <div style={{padding:"14px 16px 8px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Payment History</div>
+            <div style={{padding:"0 16px 24px"}}>
+              <div className="card">
+                {payments.map(function(p,i){
+                  return <div key={p.id||i} style={{padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                      <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(p.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.mode} · {p.payment_date}</div></div>
+                      <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:"var(--green)"}}>{fmtRupee(p.amount_paid)}</div><div className="chip paid">Paid</div></div>
+                    </div>
+                  </div>;
+                })}
+                {payments.length===0&&<div className="empty"><div className="empty-icon">📜</div><div>No payment history</div></div>}
+              </div>
+            </div>
+          </>)}
+
+          {/* NOTIFICATIONS TAB */}
+          {tab==="notifications" && (<>
+            <div style={{padding:"14px 16px 8px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Notifications</div>
+            <div style={{padding:"0 16px 24px"}}>
+              <div className="card">
+                {notifications.map(function(n,i){
+                  return <div key={n.id||i} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)",background:n.is_read?"":"#FFFBF0"}}>
+                    <div style={{fontSize:13,fontWeight:600}}>{n.title}</div>
+                    <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>{n.body}</div>
+                    <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>{n.created_at?.slice(0,16).replace("T"," ")}</div>
+                  </div>;
+                })}
+                {notifications.length===0&&<div className="empty"><div className="empty-icon">🔔</div><div>No notifications</div></div>}
+              </div>
+            </div>
+          </>)}
+        </div>
+
+        <nav className="res-tabs">
+          {[{id:"home",icon:"🏠",label:"Home"},{id:"history",icon:"📜",label:"History"},{id:"notifications",icon:"🔔",label:"Alerts",badge:unreadNotif}].map(function(t){
+            return <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative"}}>
+              <span className="tab-icon">{t.icon}</span>{t.label}
+              {t.badge>0&&<span style={{position:"absolute",top:6,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 5px"}}>{t.badge}</span>}
+            </button>;
+          })}
+        </nav>
+
+        {/* Pay submission sheet */}
+        {showPayForm&&(
+          <div className="overlay" onClick={function(){setShowPayForm(false);}}>
+            <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+              <div className="sheet-handle"/>
+              <div className="sheet-head">
+                <div><div className="sheet-title">Submit Payment</div><div className="sheet-sub">Flat {flatId} · Admin will verify and approve</div></div>
+                <button className="close-btn" onClick={function(){setShowPayForm(false);}}>✕</button>
+              </div>
+              <div className="sheet-body">
+                <div className="form-group"><label className="form-label">Month *</label>
+                  <select className="form-input" value={payForm.billing_month} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{billing_month:e.target.value});});}}>
+                    <option value="">Select Month</option>
+                    {ALL_MONTHS.slice().reverse().map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+                  </select>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+                  <div className="form-group"><label className="form-label">Mode *</label>
+                    <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
+                      {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group"><label className="form-label">Reference / Transaction ID</label><input className="form-input" placeholder="UPI ref, cheque no etc." value={payForm.reference} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{reference:e.target.value});})}}/></div>
+                <div className="form-group"><label className="form-label">Payment Screenshot</label>
+                  <input type="file" accept="image/*" className="form-input" style={{padding:"6px 10px"}}
+                    onChange={function(e){setFile(e.target.files[0]);}}/>
+                  {file&&<div style={{fontSize:11,color:"var(--green)",marginTop:4}}>✓ {file.name}</div>}
+                </div>
+                <div className="form-group"><label className="form-label">Notes (optional)</label><input className="form-input" placeholder="Any additional info" value={payForm.notes} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{notes:e.target.value});})}}/></div>
+                <button className="btn btn-success" onClick={submitPayment} disabled={saving}>{saving?<span className="spinner"/>:"📤 Submit for Approval"}</button>
+                <button className="btn btn-secondary mt10" onClick={function(){setShowPayForm(false);}}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {toast&&<div className="toast">{toast}</div>}
+      </div>
+    </>
+  );
+}
+
+// ── ApprovalsTab ───────────────────────────────────────────────
+function ApprovalsTab(props) {
+  var [sec, setSec]         = useState("registrations");
+  var [requests, setRequests] = useState([]);
+  var [payments, setPayments] = useState([]);
+  var [residents, setResidents] = useState([]);
+  var [loading, setLoading]  = useState(true);
+  var [rejectForm, setRejectForm] = useState(null); // {id, type, reason}
+  var [whatsappMsg, setWhatsappMsg] = useState(null);
+
+  useEffect(function(){ loadApprovals(); },[]);
+
+  async function loadApprovals(){
+    setLoading(true);
+    var [r, p, u] = await Promise.all([
+      supabase.from("registration_requests").select("*").order("created_at",{ascending:false}),
+      supabase.from("payment_submissions").select("*").order("created_at",{ascending:false}),
+      supabase.from("resident_users").select("*").order("created_at",{ascending:false}),
+    ]);
+    if(r.data) setRequests(r.data);
+    if(p.data) setPayments(p.data);
+    if(u.data) setResidents(u.data);
+    setLoading(false);
+  }
+
+  async function approveRegistration(req){
+    // Create resident user
+    var res = await supabase.from("resident_users").insert({
+      flat_id:req.flat_id, name:req.name, phone:req.phone,
+      password_hash:req.password_hash, role:req.role, status:"active"
+    });
+    if(res.error){ props.showToast("❌ "+res.error.message); return; }
+    // Update request
+    await supabase.from("registration_requests").update({status:"approved",approved_by:props.userProfile?.id,approved_at:new Date().toISOString()}).eq("id",req.id);
+    // Notify user
+    await supabase.from("notifications").insert({user_id:res.data?.[0]?.id,type:"welcome",title:"Welcome to Antony Pallazo! 🎉",body:"Your account has been approved. You can now login with your mobile number and password.",data:{flat_id:req.flat_id}});
+    // WhatsApp deep link
+    var msg = "Hello "+req.name+"! 👋\n\nWelcome to Antony Pallazo Apartment! 🏛\n\nYour resident account has been approved.\n\nFlat: "+req.flat_id+"\nRole: "+req.role+"\nLogin: antony-pallazo.vercel.app\nUsername: "+req.phone+"\n\nWelcome aboard! 🎉";
+    setWhatsappMsg({phone:req.phone, msg:msg, name:req.name});
+    props.showToast("✅ "+req.name+" approved!");
+    await loadApprovals();
+    await props.reload();
+  }
+
+  async function rejectRegistration(req, reason){
+    await supabase.from("registration_requests").update({status:"rejected",rejection_reason:reason}).eq("id",req.id);
+    props.showToast("Registration rejected");
+    setRejectForm(null);
+    await loadApprovals();
+  }
+
+  async function approvePayment(sub){
+    // Record actual payment
+    await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:new Date().toISOString().split("T")[0]});
+    // Update bill
+    await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
+    // Update submission
+    await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
+    // Notify resident
+    await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_approved",title:"Payment Approved ✅",body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",data:{flat_id:sub.flat_id,billing_month:sub.billing_month}});
+    props.showToast("✅ Payment approved for Flat "+sub.flat_id);
+    await loadApprovals();
+    await props.reload();
+  }
+
+  async function rejectPayment(sub, reason){
+    await supabase.from("payment_submissions").update({status:"rejected",rejection_reason:reason,reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
+    await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_rejected",title:"Payment Rejected ❌",body:"Your payment for "+monthLabel(sub.billing_month)+" was rejected. Reason: "+reason,data:{flat_id:sub.flat_id}});
+    props.showToast("Payment rejected");
+    setRejectForm(null);
+    await loadApprovals();
+  }
+
+  async function toggleAdmin(user){
+    var isAdmin = user.admin_group && user.admin_group.length > 0;
+    if(isAdmin){
+      await supabase.from("admin_group").delete().eq("resident_user_id",user.id);
+      props.showToast("Admin access revoked for "+user.name);
+    } else {
+      await supabase.from("admin_group").insert({resident_user_id:user.id,promoted_by_id:props.userProfile?.id||null});
+      props.showToast("✅ "+user.name+" is now an Admin");
+    }
+    await loadApprovals();
+  }
+
+  async function deleteResident(user){
+    if(!window.confirm("Delete "+user.name+"? All their data will be removed.")) return;
+    await supabase.from("resident_users").delete().eq("id",user.id);
+    props.showToast("User deleted");
+    await loadApprovals();
+  }
+
+  var pendingRegs = requests.filter(function(r){return r.status==="pending";});
+  var pendingPays = payments.filter(function(p){return p.status==="pending";});
+
+  if(loading) return <div className="empty" style={{paddingTop:60}}><div className="empty-icon">⏳</div><div>Loading approvals…</div></div>;
+
+  return (
+    <>
+      <div className="income-tabs">
+        {[["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["payments","💳 Payments"+(pendingPays.length>0?" ("+pendingPays.length+")":"")],["users","👥 Users"]].map(function(x){
+          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
+        })}
+      </div>
+
+      {/* ── Registration Requests ── */}
+      {sec==="registrations" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          {requests.length===0&&<div className="empty"><div className="empty-icon">📝</div><div>No registration requests</div></div>}
+          {requests.map(function(r){
+            return (
+              <div key={r.id} className="card" style={{marginBottom:12}}>
+                <div style={{padding:"12px 16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700}}>{r.name}</div>
+                      <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Flat {r.flat_id} · {r.role} · {r.phone}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{r.created_at?.slice(0,10)}</div>
+                    </div>
+                    <div className={"chip "+(r.status==="approved"?"paid":r.status==="rejected"?"overdue":"vacant")}
+                      style={{background:r.status==="approved"?"#E8F5EE":r.status==="pending"?"#FFF9E6":"#FDEDEC",color:r.status==="approved"?"var(--green)":r.status==="pending"?"#7A5C00":"var(--red)"}}>
+                      {r.status}
+                    </div>
+                  </div>
+                  {r.status==="pending" && (
+                    <div className="btn-grid" style={{gridTemplateColumns:"1fr 1fr"}}>
+                      <button className="btn btn-success" onClick={function(){approveRegistration(r);}}>✅ Approve</button>
+                      <button className="btn btn-secondary" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={function(){setRejectForm({id:r.id,type:"registration",item:r,reason:""});}}>❌ Reject</button>
+                    </div>
+                  )}
+                  {r.rejection_reason&&<div style={{fontSize:11,color:"var(--red)",marginTop:6}}>Reason: {r.rejection_reason}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Payment Submissions ── */}
+      {sec==="payments" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          {payments.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No payment submissions</div></div>}
+          {payments.map(function(p){
+            return (
+              <div key={p.id} className="card" style={{marginBottom:12}}>
+                <div style={{padding:"12px 16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700}}>Flat {p.flat_id} · {monthLabel(p.billing_month)}</div>
+                      <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{p.mode} · Ref: {p.reference_no||"—"}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.created_at?.slice(0,10)}</div>
+                      {p.notes&&<div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Note: {p.notes}</div>}
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:16,fontWeight:700,color:"var(--green)"}}>{fmtRupee(p.amount)}</div>
+                      <div className={"chip "+(p.status==="approved"?"paid":p.status==="rejected"?"overdue":"vacant")}
+                        style={{background:p.status==="approved"?"#E8F5EE":p.status==="pending"?"#FFF9E6":"#FDEDEC",color:p.status==="approved"?"var(--green)":p.status==="pending"?"#7A5C00":"var(--red)"}}>
+                        {p.status}
+                      </div>
+                    </div>
+                  </div>
+                  {p.screenshot_url&&<div style={{marginBottom:8}}><a href={p.screenshot_url} target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--gold)"}}>📷 View Screenshot</a></div>}
+                  {p.status==="pending" && (
+                    <div className="btn-grid" style={{gridTemplateColumns:"1fr 1fr"}}>
+                      <button className="btn btn-success" onClick={function(){approvePayment(p);}}>✅ Approve</button>
+                      <button className="btn btn-secondary" style={{color:"var(--red)",borderColor:"var(--red)"}} onClick={function(){setRejectForm({id:p.id,type:"payment",item:p,reason:""});}}>❌ Reject</button>
+                    </div>
+                  )}
+                  {p.rejection_reason&&<div style={{fontSize:11,color:"var(--red)",marginTop:6}}>Reason: {p.rejection_reason}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── User Management ── */}
+      {sec==="users" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div style={{fontSize:12,color:"var(--muted)",marginBottom:10}}>{residents.length} registered residents</div>
+          <div className="card">
+            {residents.map(function(u){
+              var isAdmin = u.is_admin;
+              return (
+                <div key={u.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600}}>{u.name}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Flat {u.flat_id} · {u.role} · {u.phone}</div>
+                      <div style={{fontSize:10,color:u.status==="active"?"var(--green)":"var(--red)",marginTop:3,fontWeight:600,textTransform:"uppercase"}}>{u.status}{isAdmin?" · 🔑 Admin":""}</div>
+                    </div>
+                    <div style={{display:"flex",gap:6,flexDirection:"column",alignItems:"flex-end"}}>
+                      {props.userProfile?.is_super_admin && (
+                        <button onClick={function(){toggleAdmin(u);}}
+                          style={{border:"1.5px solid",borderColor:isAdmin?"var(--red)":"var(--gold)",background:"transparent",color:isAdmin?"var(--red)":"var(--gold)",borderRadius:8,padding:"3px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                          {isAdmin?"Revoke Admin":"Make Admin"}
+                        </button>
+                      )}
+                      <button onClick={function(){deleteResident(u);}}
+                        style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑 Delete</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {residents.length===0&&<div className="empty"><div className="empty-icon">👥</div><div>No residents registered yet</div></div>}
+          </div>
+        </div>
+      )}
+
+      {/* Reject form sheet */}
+      {rejectForm && (
+        <div className="overlay" onClick={function(){setRejectForm(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div><div className="sheet-title">Reject {rejectForm.type==="registration"?"Registration":"Payment"}</div><div className="sheet-sub">Provide a reason</div></div>
+              <button className="close-btn" onClick={function(){setRejectForm(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div className="form-group"><label className="form-label">Rejection Reason *</label>
+                <input className="form-input" placeholder="e.g. Invalid proof, duplicate request..." value={rejectForm.reason}
+                  onChange={function(e){setRejectForm(function(p){return Object.assign({},p,{reason:e.target.value});});}}/>
+              </div>
+              <button className="btn btn-primary" style={{background:"var(--red)"}} onClick={function(){
+                if(!rejectForm.reason){props.showToast("⚠️ Enter a reason"); return;}
+                if(rejectForm.type==="registration") rejectRegistration(rejectForm.item,rejectForm.reason);
+                else rejectPayment(rejectForm.item,rejectForm.reason);
+              }}>❌ Confirm Rejection</button>
+              <button className="btn btn-secondary mt10" onClick={function(){setRejectForm(null);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp welcome message */}
+      {whatsappMsg && (
+        <div className="overlay" onClick={function(){setWhatsappMsg(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div><div className="sheet-title">Send Welcome Message</div><div className="sheet-sub">Open WhatsApp to {whatsappMsg.name}</div></div>
+              <button className="close-btn" onClick={function(){setWhatsappMsg(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div style={{background:"#E8F5EE",borderRadius:12,padding:"14px",fontSize:13,lineHeight:1.7,marginBottom:16,whiteSpace:"pre-wrap",color:"#1A3A1A"}}>{whatsappMsg.msg}</div>
+              <button className="btn btn-success" onClick={function(){
+                window.open("https://wa.me/91"+whatsappMsg.phone+"?text="+encodeURIComponent(whatsappMsg.msg),"_blank");
+                setWhatsappMsg(null);
+              }}>📱 Open WhatsApp</button>
+              <button className="btn btn-secondary mt10" onClick={function(){setWhatsappMsg(null);}}>Skip</button>
             </div>
           </div>
         </div>
