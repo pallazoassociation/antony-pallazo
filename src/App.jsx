@@ -2614,17 +2614,30 @@ function ReportsTab(props) {
     setReportData(null);
     var data = {};
 
+    // Default to current financial year (Apr–Mar) when opening AGM report for the first time
+    if (reportId==="agm_report" && filters.fromMonth==="2022-06") {
+      var now = new Date();
+      var fyStartYear = now.getMonth()>=3 ? now.getFullYear() : now.getFullYear()-1; // FY starts April
+      var fyFrom = fyStartYear+"-04";
+      var fyTo   = (fyStartYear+1)+"-03";
+      if (fyTo > getCurrentMonth()) fyTo = getCurrentMonth();
+      filters = Object.assign({}, filters, {fromMonth:fyFrom, toMonth:fyTo});
+      setFilters(filters);
+    }
+
     if (reportId==="monthly_collection") {
       var r = await supabase.from("monthly_summary").select("*").order("billing_month");
       data.rows = r.data || [];
     }
     else if (reportId==="income_expenditure") {
+      var fromDate = filters.fromMonth+"-01";
+      var toDate   = filters.toMonth+"-31";
       var [pay, exp, oi, cp, fd] = await Promise.all([
         supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth),
-        supabase.from("expenses").select("*").gte("expense_date",filters.fromMonth+"-01").lte("expense_date",filters.toMonth+"-31"),
-        supabase.from("other_income").select("*"),
-        supabase.from("corpus_payments").select("*"),
-        supabase.from("fixed_deposits").select("*"),
+        supabase.from("expenses").select("*").gte("expense_date",fromDate).lte("expense_date",toDate),
+        supabase.from("other_income").select("*").gte("received_date",fromDate).lte("received_date",toDate),
+        supabase.from("corpus_payments").select("*").gte("paid_date",fromDate).lte("paid_date",toDate),
+        supabase.from("fixed_deposits").select("*").gte("matured_date",fromDate).lte("matured_date",toDate),
       ]);
       data.payments = pay.data||[]; data.expenses = exp.data||[];
       data.otherIncome = oi.data||[]; data.corpus = cp.data||[]; data.fd = fd.data||[];
@@ -2671,9 +2684,10 @@ function ReportsTab(props) {
       data.rows = bills2.data || [];
     }
     else if (reportId==="agm_report") {
+      var fyFrom = filters.fromMonth, fyTo = filters.toMonth;
       var [pay2, exp2, ov3, lb2] = await Promise.all([
-        supabase.from("payments").select("*"),
-        supabase.from("expenses").select("*"),
+        supabase.from("payments").select("*").gte("billing_month",fyFrom).lte("billing_month",fyTo),
+        supabase.from("expenses").select("*").gte("expense_date",fyFrom+"-01").lte("expense_date",fyTo+"-31"),
         supabase.from("overdue_summary").select("*"),
         supabase.from("live_bank_balance").select("*").single(),
       ]);
@@ -2776,9 +2790,9 @@ function ReportViewer(props) {
   function Toolbar() {
     return (
       <div className="report-toolbar">
-        <button className="btn btn-secondary" onClick={props.onBack} style={{flex:"none",padding:"8px 14px"}}>← Back</button>
-        <button className="btn btn-secondary" onClick={function(){exportExcel();}} style={{flex:"none",padding:"8px 14px"}}>📊 Excel</button>
-        <button className="btn btn-primary" onClick={props.onPrint} style={{flex:"none",padding:"8px 14px"}}>🖨 Print / PDF</button>
+        <button className="rep-tb-btn rep-tb-back" onClick={props.onBack}>← Back</button>
+        <button className="rep-tb-btn rep-tb-excel" onClick={function(){exportExcel();}}>📊 Excel</button>
+        <button className="rep-tb-btn rep-tb-print" onClick={props.onPrint}>🖨 PDF</button>
       </div>
     );
   }
@@ -2859,40 +2873,100 @@ function ReportViewer(props) {
         {id==="income_expenditure" && (<>
           {Header("Income & Expenditure Statement", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
           <div className="report-filter-row">
-            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){
+              var nf = e.target.value;
+              props.setFilters(function(p){return Object.assign({},p,{fromMonth:nf, toMonth: p.toMonth<nf?nf:p.toMonth});});
+            }}>
               {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <span style={{padding:"0 4px",color:"var(--muted)",fontSize:12}}>to</span>
             <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
-              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+              {ALL_MONTHS.filter(function(m){return m>=props.filters.fromMonth;}).map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+            <button className="rep-apply-btn" onClick={props.onReload}>Apply</button>
           </div>
           {(function(){
             var totalMaint = (d.payments||[]).reduce(function(s,p){return s+(p.amount_paid||0);},0);
             var totalOther = (d.otherIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).reduce(function(s,o){return s+(o.amount||0);},0);
             var totalCorpus = (d.corpus||[]).reduce(function(s,c){return s+(c.amount||0);},0);
-            var totalFdMat = (d.fd||[]).filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0);
+            var totalFdMat = (d.fd||[]).reduce(function(s,f){return s+(f.matured_amount||0);},0);
             var totalIncome = totalMaint+totalOther+totalCorpus+totalFdMat;
             var totalExp = (d.expenses||[]).reduce(function(s,e){return s+(e.amount||0);},0);
+            var hasAnyData = (d.payments||[]).length+(d.otherIncome||[]).length+(d.corpus||[]).length+(d.fd||[]).length+(d.expenses||[]).length > 0;
+
             return (<>
-              <div className="report-section-title">Income</div>
+              {!hasAnyData && <div className="empty"><div className="empty-icon">📭</div><div>No transactions found in this period</div></div>}
+
+              {/* Income summary */}
+              <div className="report-section-title">Income Summary</div>
               {Table(["Source","Amount"],[
-                <tr key="m"><td>Maintenance Collected</td><td>{fmtRupee(totalMaint)}</td></tr>,
-                <tr key="o"><td>Other Income</td><td>{fmtRupee(totalOther)}</td></tr>,
-                <tr key="c"><td>Corpus Fund</td><td>{fmtRupee(totalCorpus)}</td></tr>,
-                <tr key="f"><td>FD Matured</td><td>{fmtRupee(totalFdMat)}</td></tr>,
+                <tr key="m"><td>Maintenance Collected ({(d.payments||[]).length} payments)</td><td>{fmtRupee(totalMaint)}</td></tr>,
+                <tr key="o"><td>Other Income ({(d.otherIncome||[]).length} entries)</td><td>{fmtRupee(totalOther)}</td></tr>,
+                <tr key="c"><td>Corpus Fund ({(d.corpus||[]).length} entries)</td><td>{fmtRupee(totalCorpus)}</td></tr>,
+                <tr key="f"><td>FD Matured ({(d.fd||[]).length} entries)</td><td>{fmtRupee(totalFdMat)}</td></tr>,
               ])}
               <div className="report-totals">Total Income: <b>{fmtRupee(totalIncome)}</b></div>
-              <div className="report-section-title" style={{marginTop:16}}>Expenditure</div>
+
+              {/* Detailed Maintenance payments */}
+              {(d.payments||[]).length>0 && <>
+                <div className="report-section-title" style={{marginTop:18}}>Maintenance Payments — Detail</div>
+                {Table(["Date","Flat","Month Billed","Mode","Amount"],
+                  (d.payments||[]).sort(function(a,b){return (a.payment_date||"").localeCompare(b.payment_date||"");}).map(function(p,i){
+                    return <tr key={p.id||i}><td>{p.payment_date}</td><td>{p.flat_id}</td><td>{monthLabel(p.billing_month)}</td><td>{p.mode}</td><td>{fmtRupee(p.amount_paid)}</td></tr>;
+                  })
+                )}
+              </>}
+
+              {/* Detailed Other Income */}
+              {(d.otherIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).length>0 && <>
+                <div className="report-section-title" style={{marginTop:18}}>Other Income — Detail</div>
+                {Table(["Date","Source","Amount"],
+                  (d.otherIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).sort(function(a,b){return (a.received_date||"").localeCompare(b.received_date||"");}).map(function(o,i){
+                    return <tr key={o.id||i}><td>{o.received_date||"—"}</td><td>{o.source}</td><td>{fmtRupee(o.amount)}</td></tr>;
+                  })
+                )}
+              </>}
+
+              {/* Detailed Corpus */}
+              {(d.corpus||[]).length>0 && <>
+                <div className="report-section-title" style={{marginTop:18}}>Corpus Fund — Detail</div>
+                {Table(["Date","Flat","Mode","Amount"],
+                  (d.corpus||[]).sort(function(a,b){return (a.paid_date||"").localeCompare(b.paid_date||"");}).map(function(c,i){
+                    return <tr key={c.id||i}><td>{c.paid_date||"—"}</td><td>{c.flat_id}</td><td>{c.mode||"—"}</td><td>{fmtRupee(c.amount)}</td></tr>;
+                  })
+                )}
+              </>}
+
+              {/* Detailed FD Matured */}
+              {(d.fd||[]).length>0 && <>
+                <div className="report-section-title" style={{marginTop:18}}>Fixed Deposits Matured — Detail</div>
+                {Table(["Account No","Maturity Date","Invested","Matured Amount","Interest"],
+                  (d.fd||[]).map(function(f,i){
+                    return <tr key={f.id||i}><td style={{fontFamily:"monospace"}}>{f.account_no}</td><td>{f.matured_date}</td><td>{fmtRupee(f.invested_amount)}</td><td>{fmtRupee(f.matured_amount)}</td><td style={{color:"var(--green)"}}>{fmtRupee(f.matured_amount-f.invested_amount)}</td></tr>;
+                  })
+                )}
+              </>}
+
+              {/* Detailed Expenses */}
+              <div className="report-section-title" style={{marginTop:18}}>Expenditure — Category Summary</div>
               {Table(["Category","Amount"],
                 Object.entries((d.expenses||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{}))
                   .sort(function(a,b){return b[1]-a[1];})
-                  .map(function(c){return <tr key={c[0]}><td>{c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
+                  .map(function(c){return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
               )}
               <div className="report-totals">Total Expenditure: <b>{fmtRupee(totalExp)}</b></div>
+
+              {(d.expenses||[]).length>0 && <>
+                <div className="report-section-title" style={{marginTop:18}}>Expenditure — Detail</div>
+                {Table(["Date","Vendor","Category","Amount"],
+                  (d.expenses||[]).sort(function(a,b){return (a.expense_date||"").localeCompare(b.expense_date||"");}).map(function(e,i){
+                    return <tr key={e.id||i}><td>{e.expense_date}</td><td>{e.vendor}</td><td>{e.category}</td><td>{fmtRupee(e.amount)}</td></tr>;
+                  })
+                )}
+              </>}
+
               <div className="report-totals" style={{borderTop:"2px solid var(--text)",paddingTop:8,marginTop:8}}>
-                Net Surplus / Deficit: <b style={{color:totalIncome-totalExp>=0?"var(--green)":"var(--red)"}}>{fmtRupee(totalIncome-totalExp)}</b>
+                Net Surplus / Deficit for Period: <b style={{color:totalIncome-totalExp>=0?"var(--green)":"var(--red)"}}>{fmtRupee(totalIncome-totalExp)}</b>
               </div>
             </>);
           })()}
@@ -2920,14 +2994,17 @@ function ReportViewer(props) {
         {id==="expense_category" && (<>
           {Header("Expense by Category", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
           <div className="report-filter-row">
-            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){
+              var nf = e.target.value;
+              props.setFilters(function(p){return Object.assign({},p,{fromMonth:nf, toMonth: p.toMonth<nf?nf:p.toMonth});});
+            }}>
               {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <span style={{padding:"0 4px",color:"var(--muted)",fontSize:12}}>to</span>
             <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
-              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+              {ALL_MONTHS.filter(function(m){return m>=props.filters.fromMonth;}).map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+            <button className="rep-apply-btn" onClick={props.onReload}>Apply</button>
           </div>
           {(function(){
             var bycat = (d.rows||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{});
@@ -2990,7 +3067,7 @@ function ReportViewer(props) {
               <option value="">Select Flat</option>
               {props.flatsList.map(function(f){return <option key={f} value={f}>{f}</option>;})}
             </select>
-            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Load</button>
+            <button className="rep-apply-btn" onClick={props.onReload}>Load</button>
           </div>
           {props.filters.flatId && (<>
             <div className="report-section-title">Bills</div>
@@ -3060,14 +3137,17 @@ function ReportViewer(props) {
         {id==="payment_mode" && (<>
           {Header("Payment Mode Summary", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
           <div className="report-filter-row">
-            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{fromMonth:e.target.value});});}}>
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){
+              var nf = e.target.value;
+              props.setFilters(function(p){return Object.assign({},p,{fromMonth:nf, toMonth: p.toMonth<nf?nf:p.toMonth});});
+            }}>
               {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <span style={{padding:"0 8px",color:"var(--muted)"}}>to</span>
+            <span style={{padding:"0 4px",color:"var(--muted)",fontSize:12}}>to</span>
             <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
-              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+              {ALL_MONTHS.filter(function(m){return m>=props.filters.fromMonth;}).map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
             </select>
-            <button className="btn btn-secondary" style={{flex:"none",padding:"8px 14px"}} onClick={props.onReload}>Apply</button>
+            <button className="rep-apply-btn" onClick={props.onReload}>Apply</button>
           </div>
           {(function(){
             var byMode = (d.rows||[]).reduce(function(acc,p){acc[p.mode]=(acc[p.mode]||0)+p.amount_paid;return acc;},{});
@@ -3104,22 +3184,57 @@ function ReportViewer(props) {
 
         {/* 12. AGM Report */}
         {id==="agm_report" && (<>
-          {Header("Annual General Report","Full financial summary")}
+          {Header("Annual General Report", "Financial Year: "+monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
+          <div className="report-filter-row">
+            <select className="form-input" value={props.filters.fromMonth} onChange={function(e){
+              var nf = e.target.value;
+              props.setFilters(function(p){return Object.assign({},p,{fromMonth:nf, toMonth: p.toMonth<nf?nf:p.toMonth});});
+            }}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <span style={{padding:"0 4px",color:"var(--muted)",fontSize:12}}>to</span>
+            <select className="form-input" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{toMonth:e.target.value});});}}>
+              {ALL_MONTHS.filter(function(m){return m>=props.filters.fromMonth;}).map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <button className="rep-apply-btn" onClick={props.onReload}>Apply</button>
+          </div>
           {(function(){
             var totalMaint = (d.payments||[]).reduce(function(s,p){return s+p.amount_paid;},0);
             var totalExp = (d.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
             var totalOverdue = (d.overdue||[]).reduce(function(s,o){return s+o.arrears;},0);
+            var defaultFlats = new Set((d.overdue||[]).map(function(o){return o.flat_id;})).size;
             return (<>
+              <div className="report-section-title">Financial Year Summary</div>
               {Table(["Metric","Value"],[
-                <tr key="1"><td>Total Maintenance Collected (all-time)</td><td>{fmtRupee(totalMaint)}</td></tr>,
-                <tr key="2"><td>Total Expenses (all-time)</td><td>{fmtRupee(totalExp)}</td></tr>,
-                <tr key="3"><td>Current Net Bank Balance</td><td>{fmtRupee(d.balance?.net_bank_balance)}</td></tr>,
-                <tr key="4"><td>Active FD Investment</td><td>{fmtRupee(d.balance?.active_fd_amount)}</td></tr>,
-                <tr key="5"><td>Total Outstanding Dues</td><td style={{color:"var(--red)"}}>{fmtRupee(totalOverdue)}</td></tr>,
-                <tr key="6"><td>Flats in Default</td><td>{new Set((d.overdue||[]).map(function(o){return o.flat_id;})).size} of 30</td></tr>,
-                <tr key="7"><td>Total Payment Transactions</td><td>{(d.payments||[]).length}</td></tr>,
-                <tr key="8"><td>Total Expense Transactions</td><td>{(d.expenses||[]).length}</td></tr>,
+                <tr key="1"><td>Maintenance Collected (this period)</td><td>{fmtRupee(totalMaint)}</td></tr>,
+                <tr key="2"><td>Expenses Incurred (this period)</td><td>{fmtRupee(totalExp)}</td></tr>,
+                <tr key="3"><td>Net Surplus / Deficit (this period)</td><td style={{color:totalMaint-totalExp>=0?"var(--green)":"var(--red)"}}>{fmtRupee(totalMaint-totalExp)}</td></tr>,
+                <tr key="4"><td>Current Net Bank Balance (as of today)</td><td>{fmtRupee(d.balance?.net_bank_balance)}</td></tr>,
+                <tr key="5"><td>Active FD Investment (as of today)</td><td>{fmtRupee(d.balance?.active_fd_amount)}</td></tr>,
+                <tr key="6"><td>Total Outstanding Dues (as of today, all-time)</td><td style={{color:"var(--red)"}}>{fmtRupee(totalOverdue)}</td></tr>,
+                <tr key="7"><td>Flats Currently in Default</td><td>{defaultFlats} of 30</td></tr>,
               ])}
+
+              <div className="report-section-title" style={{marginTop:18}}>Maintenance Collected — Detail ({(d.payments||[]).length} payments)</div>
+              {(d.payments||[]).length>0 ? Table(["Date","Flat","Billed Month","Mode","Amount"],
+                (d.payments||[]).sort(function(a,b){return (a.payment_date||"").localeCompare(b.payment_date||"");}).map(function(p,i){
+                  return <tr key={p.id||i}><td>{p.payment_date}</td><td>{p.flat_id}</td><td>{monthLabel(p.billing_month)}</td><td>{p.mode}</td><td>{fmtRupee(p.amount_paid)}</td></tr>;
+                })
+              ) : <div className="empty"><div className="empty-icon">📭</div><div>No payments in this period</div></div>}
+
+              <div className="report-section-title" style={{marginTop:18}}>Expenses — Category Summary</div>
+              {Table(["Category","Amount"],
+                Object.entries((d.expenses||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{}))
+                  .sort(function(a,b){return b[1]-a[1];})
+                  .map(function(c){return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
+              )}
+
+              <div className="report-section-title" style={{marginTop:18}}>Expenses — Detail ({(d.expenses||[]).length} transactions)</div>
+              {(d.expenses||[]).length>0 ? Table(["Date","Vendor","Category","Amount"],
+                (d.expenses||[]).sort(function(a,b){return (a.expense_date||"").localeCompare(b.expense_date||"");}).map(function(e,i){
+                  return <tr key={e.id||i}><td>{e.expense_date}</td><td>{e.vendor}</td><td>{e.category}</td><td>{fmtRupee(e.amount)}</td></tr>;
+                })
+              ) : <div className="empty"><div className="empty-icon">📭</div><div>No expenses in this period</div></div>}
             </>);
           })()}
         </>)}
