@@ -2089,8 +2089,44 @@ function ApprovalsTab(props) {
   var [payments, setPayments] = useState([]);
   var [residents, setResidents] = useState([]);
   var [loading, setLoading]  = useState(true);
-  var [rejectForm, setRejectForm] = useState(null); // {id, type, reason}
+  var [rejectForm, setRejectForm] = useState(null);
   var [whatsappMsg, setWhatsappMsg] = useState(null);
+  var [showAddUser, setShowAddUser] = useState(false);
+  var [editUser, setEditUser] = useState(null);
+  var [savingUser, setSavingUser] = useState(false);
+  var emptyUserForm = {name:"",flat_id:"",role:"owner",phone:"",password:"",status:"active"};
+  var [userForm, setUserForm] = useState(emptyUserForm);
+
+  useEffect(function(){
+    if (editUser) setUserForm({name:editUser.name,flat_id:editUser.flat_id,role:editUser.role,phone:editUser.phone,password:"",status:editUser.status});
+    else if (showAddUser) setUserForm(emptyUserForm);
+  }, [editUser, showAddUser]);
+
+  async function saveUserForm() {
+    if (!userForm.name || !userForm.flat_id || !userForm.phone) { props.showToast("⚠️ Fill all required fields"); return; }
+    if (!editUser && (!userForm.password || userForm.password.length < 6)) { props.showToast("⚠️ Password must be at least 6 characters"); return; }
+    setSavingUser(true);
+    if (editUser) {
+      var updateData = { name:userForm.name, flat_id:userForm.flat_id, role:userForm.role, status:userForm.status };
+      if (userForm.password) updateData.password_hash = userForm.password;
+      var r = await supabase.from("resident_users").update(updateData).eq("id", editUser.id);
+      if (r.error) { props.showToast("❌ "+r.error.message); setSavingUser(false); return; }
+      props.showToast("✅ User updated!");
+    } else {
+      var chk = await supabase.from("resident_users").select("id").eq("phone",userForm.phone).single();
+      if (!chk.error) { props.showToast("⚠️ This mobile number is already registered"); setSavingUser(false); return; }
+      var r2 = await supabase.from("resident_users").insert({
+        name:userForm.name, flat_id:userForm.flat_id, role:userForm.role,
+        phone:userForm.phone, password_hash:userForm.password, status:"active"
+      });
+      if (r2.error) { props.showToast("❌ "+r2.error.message); setSavingUser(false); return; }
+      props.showToast("✅ "+userForm.name+" added! Share their login: "+userForm.phone);
+    }
+    setSavingUser(false);
+    setShowAddUser(false);
+    setEditUser(null);
+    await loadApprovals();
+  }
 
   useEffect(function(){ loadApprovals(); },[]);
 
@@ -2261,7 +2297,10 @@ function ApprovalsTab(props) {
       {/* ── User Management ── */}
       {sec==="users" && (
         <div style={{padding:"10px 16px 24px"}}>
-          <div style={{fontSize:12,color:"var(--muted)",marginBottom:10}}>{residents.length} registered residents</div>
+          <div className="row-between" style={{marginBottom:10}}>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{residents.length} registered residents</div>
+            <button className="add-btn" onClick={function(){setShowAddUser(true);}}>＋ Add User</button>
+          </div>
           <div className="card">
             {residents.map(function(u){
               var isAdmin = u.is_admin;
@@ -2274,6 +2313,8 @@ function ApprovalsTab(props) {
                       <div style={{fontSize:10,color:u.status==="active"?"var(--green)":"var(--red)",marginTop:3,fontWeight:600,textTransform:"uppercase"}}>{u.status}{isAdmin?" · 🔑 Admin":""}</div>
                     </div>
                     <div style={{display:"flex",gap:6,flexDirection:"column",alignItems:"flex-end"}}>
+                      <button onClick={function(){setEditUser(u);}}
+                        style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️ Edit</button>
                       {props.userProfile?.is_super_admin && (
                         <button onClick={function(){toggleAdmin(u);}}
                           style={{border:"1.5px solid",borderColor:isAdmin?"var(--red)":"var(--gold)",background:"transparent",color:isAdmin?"var(--red)":"var(--gold)",borderRadius:8,padding:"3px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
@@ -2288,6 +2329,58 @@ function ApprovalsTab(props) {
               );
             })}
             {residents.length===0&&<div className="empty"><div className="empty-icon">👥</div><div>No residents registered yet</div></div>}
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit user sheet */}
+      {(showAddUser || editUser) && (
+        <div className="overlay" onClick={function(){setShowAddUser(false);setEditUser(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-handle"/>
+            <div className="sheet-head">
+              <div><div className="sheet-title">{editUser?"Edit User":"Add New User"}</div><div className="sheet-sub">{editUser?"Update resident details":"Directly create an active account — no approval needed"}</div></div>
+              <button className="close-btn" onClick={function(){setShowAddUser(false);setEditUser(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div className="form-group"><label className="form-label">Full Name *</label>
+                <input className="form-input" value={userForm.name} onChange={function(e){setUserForm(function(p){return Object.assign({},p,{name:e.target.value});});}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div className="form-group"><label className="form-label">Flat *</label>
+                  <select className="form-input" value={userForm.flat_id} onChange={function(e){setUserForm(function(p){return Object.assign({},p,{flat_id:e.target.value});});}}>
+                    <option value="">Select</option>
+                    {ALL_FLAT_IDS.map(function(f){return <option key={f} value={f}>{f}</option>;})}
+                  </select>
+                </div>
+                <div className="form-group"><label className="form-label">Role *</label>
+                  <select className="form-input" value={userForm.role} onChange={function(e){setUserForm(function(p){return Object.assign({},p,{role:e.target.value});});}}>
+                    <option value="owner">Owner</option><option value="tenant">Tenant</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-group"><label className="form-label">Mobile Number * (username) {editUser?"— read-only":""}</label>
+                <input className="form-input" type="tel" maxLength={10} value={userForm.phone} readOnly={!!editUser}
+                  style={editUser?{background:"var(--bg)",color:"var(--muted)"}:{}}
+                  onChange={function(e){setUserForm(function(p){return Object.assign({},p,{phone:e.target.value.replace(/\D/g,"")});});}}/>
+              </div>
+              <div className="form-group"><label className="form-label">{editUser?"New Password (leave blank to keep current)":"Password * (min 6 chars)"}</label>
+                <input className="form-input" type="text" placeholder={editUser?"Leave blank to keep unchanged":"Set initial password"}
+                  value={userForm.password} onChange={function(e){setUserForm(function(p){return Object.assign({},p,{password:e.target.value});});}}/>
+              </div>
+              {editUser && (
+                <div className="form-group">
+                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13}}>
+                    <input type="checkbox" checked={userForm.status==="active"} onChange={function(e){setUserForm(function(p){return Object.assign({},p,{status:e.target.checked?"active":"inactive"});});}}/>
+                    Active Account
+                  </label>
+                </div>
+              )}
+              <button className="btn btn-success" onClick={saveUserForm} disabled={savingUser}>
+                {savingUser?<span className="spinner"/>:(editUser?"✅ Update User":"✅ Create User")}
+              </button>
+              <button className="btn btn-secondary mt10" onClick={function(){setShowAddUser(false);setEditUser(null);}}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
