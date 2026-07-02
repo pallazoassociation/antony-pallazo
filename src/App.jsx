@@ -298,7 +298,7 @@ export default function App() {
   var [toast, setToast] = useState(null);
   var [payModal, setPayModal] = useState(false);
   var [noticePanel, setNoticePanel] = useState(null);
-  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payType:"current",months:[]});
+  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0],payType:"current",months:[]});
 
   // Auto-generate bills for a new month when it doesn't exist yet
   var autoGenBills = useCallback(async function(month, summary) {
@@ -479,15 +479,16 @@ export default function App() {
 
   async function handlePayment() {
     var flat = selFlat;
-    var today = new Date().toISOString().split("T")[0];
+    var payDate = payForm.payDate || new Date().toISOString().split("T")[0];
     var charge = flat.monthly_charge;
 
     if (payForm.payType === "current") {
       var amt = parseInt(payForm.amount, 10);
       if (!amt || amt <= 0) { showToast("⚠️ Enter a valid amount"); return; }
+      if (!payDate) { showToast("⚠️ Enter the payment received date"); return; }
       var r = await supabase.from("payments").insert({
         flat_id:flat.id, billing_month:selMonth, amount_paid:amt,
-        mode:payForm.mode, reference:payForm.ref||null, payment_date:today
+        mode:payForm.mode, reference:payForm.ref||null, payment_date:payDate
       });
       if (r.error) { showToast("❌ "+r.error.message); return; }
       await supabase.from("bills").update({status:"paid",arrears:0})
@@ -499,13 +500,13 @@ export default function App() {
       if (!payForm.months || payForm.months.length === 0) {
         showToast("⚠️ Select at least one month"); return;
       }
+      if (!payDate) { showToast("⚠️ Enter the payment received date"); return; }
       var inserts = payForm.months.map(function(bm) {
         return { flat_id:flat.id, billing_month:bm, amount_paid:charge,
-                 mode:payForm.mode, reference:payForm.ref||null, payment_date:today };
+                 mode:payForm.mode, reference:payForm.ref||null, payment_date:payDate };
       });
       var r2 = await supabase.from("payments").insert(inserts);
       if (r2.error) { showToast("❌ "+r2.error.message); return; }
-      // Mark each month as paid (create bill if missing)
       for (var i = 0; i < payForm.months.length; i++) {
         var bm = payForm.months[i];
         var y = parseInt(bm.slice(0,4)), m = parseInt(bm.slice(5,7));
@@ -525,7 +526,7 @@ export default function App() {
     await loadData();
     await loadMonthData(selMonth);
     setPayModal(false);
-    setPayForm({amount:"",mode:"Cash",ref:"",payType:"current",months:[]});
+    setPayForm({amount:"",mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0],payType:"current",months:[]});
   }
 
   // Render guards
@@ -719,16 +720,17 @@ export default function App() {
                     }}>↩️ Revert Unpaid</button>
                 ) : (
                   /* Not paid — show Mark Paid */
-                  <button className="btn btn-success" onClick={async function(){
-                    var bill = getBillForFlat(selFlat.id);
-                    if (!bill) { showToast("⚠️ No bill found for "+monthLabel(selMonth)); return; }
-                    await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",selFlat.id).eq("billing_month",selMonth);
-                    await supabase.from("payments").insert({flat_id:selFlat.id,billing_month:selMonth,amount_paid:selFlat.monthly_charge,mode:"Cash",payment_date:new Date().toISOString().split("T")[0]});
-                    showToast("✅ Flat "+selFlat.flat_no+" marked as paid for "+monthLabel(selMonth));
-                    setSelFlat(null);
-                    await loadMonthData(selMonth);
-                    var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
-                    if (s.data) setMonthlySummaries(s.data);
+                  <button className="btn btn-success" onClick={function(){
+                    // Open pay modal pre-filled for quick mark paid
+                    setPayForm({
+                      amount:String(selFlat.monthly_charge),
+                      mode:"Cash",
+                      ref:"",
+                      payDate:new Date().toISOString().split("T")[0],
+                      payType:"current",
+                      months:[]
+                    });
+                    setPayModal(true);
                   }}>✓ Mark Paid</button>
                 )}
 
@@ -837,6 +839,12 @@ export default function App() {
               )}
 
               {/* Common fields */}
+              <div className="form-group">
+                <label className="form-label">Date Received *</label>
+                <input className="form-input" type="date" value={payForm.payDate}
+                  max={new Date().toISOString().split("T")[0]}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{payDate:e.target.value});});}}/>
+              </div>
               <div className="form-group">
                 <label className="form-label">Payment Mode</label>
                 <select className="form-input" value={payForm.mode}
@@ -1948,7 +1956,7 @@ function ResidentPortal(props) {
   var [submissions, setSubmissions] = useState([]);
   var [loading, setLoading] = useState(true);
   var [showPayForm, setShowPayForm] = useState(false);
-  var [payForm, setPayForm] = useState({billing_month:"",amount:"",mode:"UPI",reference:"",notes:""});
+  var [payForm, setPayForm] = useState({billing_month:"",amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0]});
   var [saving, setSaving] = useState(false);
   var [toast, setToast] = useState(null);
   var [notifications, setNotifications] = useState([]);
@@ -1999,7 +2007,7 @@ function ResidentPortal(props) {
   }
 
   async function submitPayment(){
-    if(!payForm.billing_month||!payForm.amount||!payForm.mode){ showToast("⚠️ Fill all required fields"); return; }
+    if(!payForm.billing_month||!payForm.amount||!payForm.mode||!payForm.transaction_date){ showToast("⚠️ Fill all required fields including payment date"); return; }
     setSaving(true);
     var screenshotUrl = null;
     // Upload screenshot if provided
@@ -2015,7 +2023,8 @@ function ResidentPortal(props) {
       flat_id:flatId, billing_month:payForm.billing_month,
       amount:parseInt(payForm.amount), mode:payForm.mode,
       reference_no:payForm.reference||null, notes:payForm.notes||null,
-      screenshot_url:screenshotUrl, submitted_by:props.profile.id, status:"pending"
+      screenshot_url:screenshotUrl, submitted_by:props.profile.id, status:"pending",
+      transaction_date:payForm.transaction_date||null
     });
     if(res.error){ showToast("❌ "+res.error.message); setSaving(false); return; }
     // Notify all admins
@@ -2027,7 +2036,7 @@ function ResidentPortal(props) {
     });
     setSaving(false);
     setShowPayForm(false);
-    setPayForm({billing_month:"",amount:"",mode:"UPI",reference:"",notes:""});
+    setPayForm({billing_month:"",amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0]});
     setFile(null);
     showToast("✅ Payment submitted! Awaiting admin approval.");
     await loadResidentData();
@@ -2180,6 +2189,12 @@ function ResidentPortal(props) {
                     </select>
                   </div>
                 </div>
+                <div className="form-group">
+                  <label className="form-label">Payment / Transaction Date *</label>
+                  <input className="form-input" type="date" value={payForm.transaction_date}
+                    max={new Date().toISOString().split("T")[0]}
+                    onChange={function(e){setPayForm(function(p){return Object.assign({},p,{transaction_date:e.target.value});});}}/>
+                </div>
                 <div className="form-group"><label className="form-label">Reference / Transaction ID</label><input className="form-input" placeholder="UPI ref, cheque no etc." value={payForm.reference} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{reference:e.target.value});})}}/></div>
                 <div className="form-group"><label className="form-label">Payment Screenshot</label>
                   <input type="file" accept="image/*" className="form-input" style={{padding:"6px 10px"}}
@@ -2318,7 +2333,7 @@ function ApprovalsTab(props) {
 
   async function approvePayment(sub){
     // Record actual payment
-    await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:new Date().toISOString().split("T")[0]});
+    await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]});
     // Update bill
     await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
     // Update submission
@@ -2415,7 +2430,9 @@ function ApprovalsTab(props) {
                     <div>
                       <div style={{fontSize:14,fontWeight:700}}>Flat {p.flat_id} · {monthLabel(p.billing_month)}</div>
                       <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{p.mode} · Ref: {p.reference_no||"—"}</div>
-                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.created_at?.slice(0,10)}</div>
+                      <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>
+                        Payment Date: <b style={{color:"var(--text)"}}>{p.transaction_date||"—"}</b> · Submitted: {p.created_at?.slice(0,10)}
+                      </div>
                       {p.notes&&<div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Note: {p.notes}</div>}
                     </div>
                     <div style={{textAlign:"right"}}>
