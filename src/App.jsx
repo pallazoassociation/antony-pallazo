@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabase";
 import * as XLSX from "xlsx";
 import "./app.css";
@@ -26,6 +26,12 @@ function getNextMonth(bm) {
   if (m === 12) return (y+1) + "-01";
   return y + "-" + String(m+1).padStart(2,"0");
 }
+function lastDayOfMonth(ym) {
+  var y=parseInt(ym.slice(0,4)), m=parseInt(ym.slice(5,7));
+  return new Date(y, m, 0).getDate(); // day 0 of next month = last day of this month
+}
+function monthEndDate(ym) { return ym+"-"+String(lastDayOfMonth(ym)).padStart(2,"0"); }
+
 function buildMonthList() {
   var months = [];
   var y = 2022, m = 6;
@@ -2586,12 +2592,13 @@ function ReportsTab(props) {
 
   var REPORT_CATEGORIES = [
     { cat:"Financial", reports:[
-      {id:"monthly_collection", icon:"📅", name:"Monthly Collection Summary", desc:"Billed vs collected vs outstanding, by month"},
-      {id:"income_expenditure",  icon:"📈", name:"Income & Expenditure",       desc:"Full income/expense statement for a period"},
-      {id:"bank_balance",        icon:"🏦", name:"Bank Balance Statement",     desc:"Opening, inflows, outflows, closing balance"},
-      {id:"expense_category",    icon:"🥧", name:"Expense by Category",       desc:"Category-wise expense breakdown with trend"},
-      {id:"corpus_register",     icon:"💎", name:"Corpus Fund Register",      desc:"Who paid, who hasn't, running total"},
-      {id:"fd_register",         icon:"🏛", name:"Fixed Deposit Register",    desc:"Investments, maturities, interest earned"},
+      {id:"monthly_collection",  icon:"📅", name:"Monthly Collection Summary",  desc:"Billed vs collected vs outstanding, by month"},
+      {id:"monthly_expense",     icon:"📉", name:"Monthly Expense Summary",      desc:"Total expenses by month with category breakdown"},
+      {id:"income_expenditure",  icon:"📈", name:"Income & Expenditure",         desc:"Full income/expense statement for a period"},
+      {id:"bank_balance",        icon:"🏦", name:"Bank Balance Statement",       desc:"Opening, inflows, outflows, closing balance"},
+      {id:"expense_category",    icon:"🥧", name:"Expense by Category",          desc:"Category-wise expense breakdown with trend"},
+      {id:"corpus_register",     icon:"💎", name:"Corpus Fund Register",         desc:"Who paid, who hasn't, running total"},
+      {id:"fd_register",         icon:"🏛", name:"Fixed Deposit Register",       desc:"Investments, maturities, interest earned"},
     ]},
     { cat:"Collection & Dues", reports:[
       {id:"flat_ledger",     icon:"📒", name:"Flat-wise Ledger",        desc:"Complete payment history for one flat"},
@@ -2629,9 +2636,13 @@ function ReportsTab(props) {
       var r = await supabase.from("monthly_summary").select("*").order("billing_month");
       data.rows = r.data || [];
     }
+    else if (reportId==="monthly_expense") {
+      var ex = await supabase.from("expenses").select("*").order("expense_date");
+      data.rows = ex.data || [];
+    }
     else if (reportId==="income_expenditure") {
       var fromDate = filters.fromMonth+"-01";
-      var toDate   = filters.toMonth+"-31";
+      var toDate   = monthEndDate(filters.toMonth);
       var [pay, exp, oi, cp, fd] = await Promise.all([
         supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth),
         supabase.from("expenses").select("*").gte("expense_date",fromDate).lte("expense_date",toDate),
@@ -2647,7 +2658,7 @@ function ReportsTab(props) {
       data.balance = lb.data || {};
     }
     else if (reportId==="expense_category") {
-      var e = await supabase.from("expenses").select("*").gte("expense_date",filters.fromMonth+"-01").lte("expense_date",filters.toMonth+"-31");
+      var e = await supabase.from("expenses").select("*").gte("expense_date",filters.fromMonth+"-01").lte("expense_date",monthEndDate(filters.toMonth));
       data.rows = e.data || [];
     }
     else if (reportId==="corpus_register") {
@@ -2687,7 +2698,7 @@ function ReportsTab(props) {
       var fyFrom = filters.fromMonth, fyTo = filters.toMonth;
       var [pay2, exp2, ov3, lb2] = await Promise.all([
         supabase.from("payments").select("*").gte("billing_month",fyFrom).lte("billing_month",fyTo),
-        supabase.from("expenses").select("*").gte("expense_date",fyFrom+"-01").lte("expense_date",fyTo+"-31"),
+        supabase.from("expenses").select("*").gte("expense_date",fyFrom+"-01").lte("expense_date",monthEndDate(fyTo)),
         supabase.from("overdue_summary").select("*"),
         supabase.from("live_bank_balance").select("*").single(),
       ]);
@@ -2758,7 +2769,8 @@ function ReportsTab(props) {
 }
 
 var REPORT_TITLES = {
-  monthly_collection:"Monthly_Collection_Summary", income_expenditure:"Income_Expenditure",
+  monthly_collection:"Monthly_Collection_Summary", monthly_expense:"Monthly_Expense_Summary",
+  income_expenditure:"Income_Expenditure",
   bank_balance:"Bank_Balance_Statement", expense_category:"Expense_by_Category",
   corpus_register:"Corpus_Fund_Register", fd_register:"Fixed_Deposit_Register",
   flat_ledger:"Flat_Ledger", defaulter_list:"Defaulter_List", ageing_report:"Arrear_Ageing",
@@ -2785,7 +2797,15 @@ function ReportViewer(props) {
     );
   }
 
-  var exportRef = { headers:[], rows:[], title:"" };
+  var exportSheetsRef = useRef([]);
+
+  function extractText(node) {
+    if (node==null) return "";
+    if (typeof node==="string"||typeof node==="number") return String(node);
+    if (Array.isArray(node)) return node.map(extractText).join("");
+    if (node.props && node.props.children) return extractText(node.props.children);
+    return "";
+  }
 
   function Toolbar() {
     return (
@@ -2798,28 +2818,39 @@ function ReportViewer(props) {
   }
 
   function exportExcel() {
-    if (!exportRef.rows.length) { alert("No data to export"); return; }
-    var ws = XLSX.utils.aoa_to_sheet([exportRef.headers].concat(exportRef.rows));
+    var sheets = exportSheetsRef.current;
+    if (!sheets.length) { alert("No data to export"); return; }
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Report");
-    var fname = (exportRef.title||"report").replace(/[^a-z0-9]/gi,"_")+"_"+new Date().toISOString().slice(0,10)+".xlsx";
+    sheets.forEach(function(s) {
+      if (!s.rows.length) return;
+      var ws = XLSX.utils.aoa_to_sheet([s.headers].concat(s.rows));
+      var widths = s.headers.map(function(h,i){
+        var maxLen = Math.max(h.length, ...s.rows.map(function(r){return String(r[i]||"").length;}));
+        return { wch: Math.min(maxLen+2, 45) };
+      });
+      ws['!cols'] = widths;
+      XLSX.utils.book_append_sheet(wb, ws, s.title.slice(0,31));
+    });
+    var fname = (REPORT_TITLES[id]||"report")+"_"+new Date().toISOString().slice(0,10)+".xlsx";
     XLSX.writeFile(wb, fname);
   }
 
-  function Table(headers, rows) {
-    exportRef.headers = headers;
-    exportRef.title = REPORT_TITLES[id] || id;
-    // Auto-extract plain-text rows from the JSX <tr><td> structure for Excel export
-    exportRef.rows = rows.map(function(tr) {
+  // Reset sheets before each render so they don't duplicate
+  exportSheetsRef.current = [];
+
+  function Table(headers, rows, sectionTitle) {
+    var rawRows = rows.map(function(tr) {
       var cells = Array.isArray(tr.props.children) ? tr.props.children : [tr.props.children];
       return cells.map(function(td) {
-        if (td == null) return "";
+        if (!td) return "";
         var content = td.props ? td.props.children : td;
-        if (Array.isArray(content)) {
-          return content.map(function(c){ return (c && c.props) ? extractText(c) : c; }).join("");
-        }
-        return content==null ? "" : String(content);
+        return extractText(content);
       });
+    });
+    exportSheetsRef.current.push({
+      title: sectionTitle || ("Sheet"+(exportSheetsRef.current.length+1)),
+      headers: headers,
+      rows: rawRows
     });
     return (
       <table className="report-table">
@@ -2827,14 +2858,6 @@ function ReportViewer(props) {
         <tbody>{rows}</tbody>
       </table>
     );
-  }
-
-  function extractText(node) {
-    if (node==null) return "";
-    if (typeof node==="string"||typeof node==="number") return String(node);
-    if (Array.isArray(node)) return node.map(extractText).join("");
-    if (node.props && node.props.children) return extractText(node.props.children);
-    return "";
   }
 
   if (props.loading) return (
@@ -2862,14 +2885,53 @@ function ReportViewer(props) {
                 <td>{fmtRupee(r.collected)}</td><td>{fmtRupee(r.dues)}</td><td>{fmtRupee(r.expected)}</td>
               </tr>;
             })
-          )}
+          , "Monthly Collection")}
           <div className="report-totals">
             Total Collected: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+(r.collected||0);},0))}</b> ·
             Total Dues: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+(r.dues||0);},0))}</b>
           </div>
         </>)}
 
-        {/* 2. Income & Expenditure */}
+        {/* 2. Monthly Expense Summary */}
+        {id==="monthly_expense" && (<>
+          {Header("Monthly Expense Summary","All months · expense breakdown by month")}
+          {(function(){
+            // Group expenses by billing_month (use expense_date month)
+            var byMonth = {};
+            (d.rows||[]).forEach(function(e){
+              var bm = e.billing_month || (e.expense_date ? e.expense_date.slice(0,7) : "Unknown");
+              if (!byMonth[bm]) byMonth[bm] = {total:0, cats:{}};
+              byMonth[bm].total += e.amount;
+              byMonth[bm].cats[e.category] = (byMonth[bm].cats[e.category]||0) + e.amount;
+            });
+            var months = Object.keys(byMonth).sort();
+            var grandTotal = months.reduce(function(s,m){return s+byMonth[m].total;},0);
+            var allCats = [...new Set((d.rows||[]).map(function(e){return e.category;}))].sort();
+
+            return (<>
+              {Table(["Month","Total","Salary","Electricity","Sewage","Repairs","Cleaning","Other"],
+                months.map(function(m){
+                  var mdata = byMonth[m];
+                  return <tr key={m}>
+                    <td>{monthLabel(m)}</td>
+                    <td style={{fontWeight:700}}>{fmtRupee(mdata.total)}</td>
+                    <td>{fmtRupee(mdata.cats["Salary"]||0)}</td>
+                    <td>{fmtRupee(mdata.cats["Electricity"]||0)}</td>
+                    <td>{fmtRupee(mdata.cats["Sewage"]||0)}</td>
+                    <td>{fmtRupee(mdata.cats["Repairs"]||0)}</td>
+                    <td>{fmtRupee(mdata.cats["Cleaning"]||0)}</td>
+                    <td>{fmtRupee(["Maintenance","Admin","Staff Welfare","Other"].reduce(function(s,c){return s+(mdata.cats[c]||0);},0))}</td>
+                  </tr>;
+                }), "Monthly Expense Summary"
+              )}
+              <div className="report-totals">
+                Grand Total: <b>{fmtRupee(grandTotal)}</b> across {months.length} months · {(d.rows||[]).length} transactions
+              </div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 3. Income & Expenditure */}
         {id==="income_expenditure" && (<>
           {Header("Income & Expenditure Statement", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
           <div className="report-filter-row">
@@ -2904,7 +2966,7 @@ function ReportViewer(props) {
                 <tr key="o"><td>Other Income ({(d.otherIncome||[]).length} entries)</td><td>{fmtRupee(totalOther)}</td></tr>,
                 <tr key="c"><td>Corpus Fund ({(d.corpus||[]).length} entries)</td><td>{fmtRupee(totalCorpus)}</td></tr>,
                 <tr key="f"><td>FD Matured ({(d.fd||[]).length} entries)</td><td>{fmtRupee(totalFdMat)}</td></tr>,
-              ])}
+              ], "Income Summary")}
               <div className="report-totals">Total Income: <b>{fmtRupee(totalIncome)}</b></div>
 
               {/* Detailed Maintenance payments */}
@@ -2914,7 +2976,7 @@ function ReportViewer(props) {
                   (d.payments||[]).sort(function(a,b){return (a.payment_date||"").localeCompare(b.payment_date||"");}).map(function(p,i){
                     return <tr key={p.id||i}><td>{p.payment_date}</td><td>{p.flat_id}</td><td>{monthLabel(p.billing_month)}</td><td>{p.mode}</td><td>{fmtRupee(p.amount_paid)}</td></tr>;
                   })
-                )}
+                , "Maintenance Payments")}
               </>}
 
               {/* Detailed Other Income */}
@@ -2924,7 +2986,7 @@ function ReportViewer(props) {
                   (d.otherIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).sort(function(a,b){return (a.received_date||"").localeCompare(b.received_date||"");}).map(function(o,i){
                     return <tr key={o.id||i}><td>{o.received_date||"—"}</td><td>{o.source}</td><td>{fmtRupee(o.amount)}</td></tr>;
                   })
-                )}
+                , "Other Income")}
               </>}
 
               {/* Detailed Corpus */}
@@ -2934,7 +2996,7 @@ function ReportViewer(props) {
                   (d.corpus||[]).sort(function(a,b){return (a.paid_date||"").localeCompare(b.paid_date||"");}).map(function(c,i){
                     return <tr key={c.id||i}><td>{c.paid_date||"—"}</td><td>{c.flat_id}</td><td>{c.mode||"—"}</td><td>{fmtRupee(c.amount)}</td></tr>;
                   })
-                )}
+                , "Corpus Payments")}
               </>}
 
               {/* Detailed FD Matured */}
@@ -2944,7 +3006,7 @@ function ReportViewer(props) {
                   (d.fd||[]).map(function(f,i){
                     return <tr key={f.id||i}><td style={{fontFamily:"monospace"}}>{f.account_no}</td><td>{f.matured_date}</td><td>{fmtRupee(f.invested_amount)}</td><td>{fmtRupee(f.matured_amount)}</td><td style={{color:"var(--green)"}}>{fmtRupee(f.matured_amount-f.invested_amount)}</td></tr>;
                   })
-                )}
+                , "FD Matured")}
               </>}
 
               {/* Detailed Expenses */}
@@ -2953,16 +3015,16 @@ function ReportViewer(props) {
                 Object.entries((d.expenses||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{}))
                   .sort(function(a,b){return b[1]-a[1];})
                   .map(function(c){return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
-              )}
+              , "Expense Category")}
               <div className="report-totals">Total Expenditure: <b>{fmtRupee(totalExp)}</b></div>
 
               {(d.expenses||[]).length>0 && <>
                 <div className="report-section-title" style={{marginTop:18}}>Expenditure — Detail</div>
-                {Table(["Date","Vendor","Category","Amount"],
+                {Table(["Date","Expense Description","Category","Amount"],
                   (d.expenses||[]).sort(function(a,b){return (a.expense_date||"").localeCompare(b.expense_date||"");}).map(function(e,i){
                     return <tr key={e.id||i}><td>{e.expense_date}</td><td>{e.vendor}</td><td>{e.category}</td><td>{fmtRupee(e.amount)}</td></tr>;
                   })
-                )}
+                , "Expense Detail")}
               </>}
 
               <div className="report-totals" style={{borderTop:"2px solid var(--text)",paddingTop:8,marginTop:8}}>
@@ -2983,7 +3045,7 @@ function ReportViewer(props) {
             <tr key="fm"><td>(+) FD Matured</td><td style={{color:"var(--green)"}}>{fmtRupee(d.balance?.total_fd_matured)}</td></tr>,
             <tr key="e"><td>(−) Total Expenses</td><td style={{color:"var(--red)"}}>{fmtRupee(d.balance?.total_expenses)}</td></tr>,
             <tr key="fi"><td>(−) FD Invested</td><td style={{color:"var(--red)"}}>{fmtRupee(d.balance?.total_fd_invested)}</td></tr>,
-          ])}
+          ], "Bank Balance")}
           <div className="report-totals" style={{borderTop:"2px solid var(--text)",paddingTop:8}}>
             Net Bank Balance: <b style={{color:"var(--green)"}}>{fmtRupee(d.balance?.net_bank_balance)}</b><br/>
             Active FD (separate asset): <b>{fmtRupee(d.balance?.active_fd_amount)}</b>
@@ -3014,7 +3076,7 @@ function ReportViewer(props) {
                 Object.entries(bycat).sort(function(a,b){return b[1]-a[1];}).map(function(c){
                   return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td><td>{total>0?Math.round(c[1]/total*100):0}%</td></tr>;
                 })
-              )}
+              , "Expense by Category")}
               <div className="report-totals">Total Expenses: <b>{fmtRupee(total)}</b> across {(d.rows||[]).length} transactions</div>
             </>);
           })()}
@@ -3030,7 +3092,7 @@ function ReportViewer(props) {
               {Table(["Flat","Date Paid","Mode","Amount"],
                 (d.rows||[]).map(function(r){return <tr key={r.id}><td>{r.flat_id}</td><td>{r.paid_date||"—"}</td><td>{r.mode||"—"}</td><td>{fmtRupee(r.amount)}</td></tr>;})
                   .concat(unpaid.map(function(f){return <tr key={f} style={{opacity:.5}}><td>{f}</td><td colSpan="2">Not Paid</td><td>—</td></tr>;}))
-              )}
+              , "Corpus Register")}
               <div className="report-totals">
                 Total Collected: <b>{fmtRupee((d.rows||[]).reduce(function(s,r){return s+r.amount;},0))}</b> ·
                 Paid: {(d.rows||[]).length}/30 flats
@@ -3052,7 +3114,7 @@ function ReportViewer(props) {
                 <td>{f.status}</td>
               </tr>;
             })
-          )}
+          , "FD Register")}
           <div className="report-totals">
             Total Invested: <b>{fmtRupee((d.rows||[]).reduce(function(s,f){return s+f.invested_amount;},0))}</b> ·
             Total Matured: <b>{fmtRupee((d.rows||[]).filter(function(f){return f.matured_amount;}).reduce(function(s,f){return s+f.matured_amount;},0))}</b>
@@ -3073,11 +3135,11 @@ function ReportViewer(props) {
             <div className="report-section-title">Bills</div>
             {Table(["Month","Amount","Status","Arrears"],
               (d.bills||[]).map(function(b){return <tr key={b.billing_month}><td>{monthLabel(b.billing_month)}</td><td>{fmtRupee(b.total_amount)}</td><td style={{color:b.status==="paid"?"var(--green)":"var(--red)"}}>{b.status}</td><td>{b.arrears?fmtRupee(b.arrears):"—"}</td></tr>;})
-            )}
+            , "Bills")}
             <div className="report-section-title" style={{marginTop:16}}>Payments</div>
             {Table(["Date","Month","Amount","Mode"],
               (d.payments||[]).map(function(p,i){return <tr key={p.id||i}><td>{p.payment_date}</td><td>{monthLabel(p.billing_month)}</td><td>{fmtRupee(p.amount_paid)}</td><td>{p.mode}</td></tr>;})
-            )}
+            , "Payments")}
             <div className="report-totals">
               Total Paid: <b>{fmtRupee((d.payments||[]).reduce(function(s,p){return s+p.amount_paid;},0))}</b> ·
               Total Outstanding: <b style={{color:"var(--red)"}}>{fmtRupee((d.bills||[]).filter(function(b){return b.status==="overdue";}).reduce(function(s,b){return s+(b.arrears||0);},0))}</b>
@@ -3099,7 +3161,7 @@ function ReportViewer(props) {
             return (<>
               {Table(["Flat","Months Unpaid","Amount"],
                 sorted.map(function(s){return <tr key={s[0]}><td>{s[0]}</td><td>{s[1].months.length} ({s[1].months.map(monthLabel).join(", ")})</td><td style={{color:"var(--red)"}}>{fmtRupee(s[1].total)}</td></tr>;})
-              )}
+              , "Defaulters")}
               <div className="report-totals">
                 Total Outstanding: <b style={{color:"var(--red)"}}>{fmtRupee(sorted.reduce(function(s,x){return s+x[1].total;},0))}</b> ·
                 {sorted.length} flats in default
@@ -3127,7 +3189,7 @@ function ReportViewer(props) {
             return (<>
               {Table(["Ageing Bucket","Flats","Amount"],
                 Object.keys(buckets).map(function(b){return <tr key={b}><td>{b} days</td><td>{bucketRows[b].length}</td><td style={{color:"var(--red)"}}>{fmtRupee(buckets[b])}</td></tr>;})
-              )}
+              , "Ageing")}
               <div className="report-totals">Total: <b style={{color:"var(--red)"}}>{fmtRupee(Object.values(buckets).reduce(function(a,b){return a+b;},0))}</b></div>
             </>);
           })()}
@@ -3155,7 +3217,7 @@ function ReportViewer(props) {
             return (<>
               {Table(["Mode","Transactions","Amount"],
                 Object.entries(byMode).sort(function(a,b){return b[1]-a[1];}).map(function(m){return <tr key={m[0]}><td>{m[0]}</td><td>{counts[m[0]]}</td><td>{fmtRupee(m[1])}</td></tr>;})
-              )}
+              , "Payment Mode")}
               <div className="report-totals">Total: <b>{fmtRupee(Object.values(byMode).reduce(function(a,b){return a+b;},0))}</b> across {(d.rows||[]).length} transactions</div>
             </>);
           })()}
@@ -3175,7 +3237,7 @@ function ReportViewer(props) {
             return (<>
               {Table(["Flat","Months Pre-Paid","Amount"],
                 sorted.map(function(s){return <tr key={s[0]}><td>{s[0]}</td><td>{s[1].months.length} ({s[1].months.sort().map(monthLabel).join(", ")})</td><td style={{color:"var(--green)"}}>{fmtRupee(s[1].total)}</td></tr>;})
-              )}
+              , "Advance Payments")}
               {sorted.length===0&&<div className="empty"><div className="empty-icon">⏩</div><div>No advance payments found</div></div>}
               <div className="report-totals">Total Advance: <b style={{color:"var(--green)"}}>{fmtRupee(sorted.reduce(function(s,x){return s+x[1].total;},0))}</b></div>
             </>);
@@ -3213,28 +3275,28 @@ function ReportViewer(props) {
                 <tr key="5"><td>Active FD Investment (as of today)</td><td>{fmtRupee(d.balance?.active_fd_amount)}</td></tr>,
                 <tr key="6"><td>Total Outstanding Dues (as of today, all-time)</td><td style={{color:"var(--red)"}}>{fmtRupee(totalOverdue)}</td></tr>,
                 <tr key="7"><td>Flats Currently in Default</td><td>{defaultFlats} of 30</td></tr>,
-              ])}
+              ], "AGM Summary")}
 
               <div className="report-section-title" style={{marginTop:18}}>Maintenance Collected — Detail ({(d.payments||[]).length} payments)</div>
               {(d.payments||[]).length>0 ? Table(["Date","Flat","Billed Month","Mode","Amount"],
                 (d.payments||[]).sort(function(a,b){return (a.payment_date||"").localeCompare(b.payment_date||"");}).map(function(p,i){
                   return <tr key={p.id||i}><td>{p.payment_date}</td><td>{p.flat_id}</td><td>{monthLabel(p.billing_month)}</td><td>{p.mode}</td><td>{fmtRupee(p.amount_paid)}</td></tr>;
                 })
-              ) : <div className="empty"><div className="empty-icon">📭</div><div>No payments in this period</div></div>}
+              , "AGM Maintenance") : <div className="empty"><div className="empty-icon">📭</div><div>No payments in this period</div></div>}
 
               <div className="report-section-title" style={{marginTop:18}}>Expenses — Category Summary</div>
               {Table(["Category","Amount"],
                 Object.entries((d.expenses||[]).reduce(function(acc,e){acc[e.category]=(acc[e.category]||0)+e.amount;return acc;},{}))
                   .sort(function(a,b){return b[1]-a[1];})
                   .map(function(c){return <tr key={c[0]}><td>{catEmoji(c[0])} {c[0]}</td><td>{fmtRupee(c[1])}</td></tr>;})
-              )}
+              , "AGM Expense Category")}
 
               <div className="report-section-title" style={{marginTop:18}}>Expenses — Detail ({(d.expenses||[]).length} transactions)</div>
-              {(d.expenses||[]).length>0 ? Table(["Date","Vendor","Category","Amount"],
+              {(d.expenses||[]).length>0 ? Table(["Date","Expense Description","Category","Amount"],
                 (d.expenses||[]).sort(function(a,b){return (a.expense_date||"").localeCompare(b.expense_date||"");}).map(function(e,i){
                   return <tr key={e.id||i}><td>{e.expense_date}</td><td>{e.vendor}</td><td>{e.category}</td><td>{fmtRupee(e.amount)}</td></tr>;
                 })
-              ) : <div className="empty"><div className="empty-icon">📭</div><div>No expenses in this period</div></div>}
+              , "AGM Expense Detail") : <div className="empty"><div className="empty-icon">📭</div><div>No expenses in this period</div></div>}
             </>);
           })()}
         </>)}
@@ -3244,7 +3306,7 @@ function ReportViewer(props) {
           {Header("Staff Salary Register",monthLabel(getCurrentMonth()))}
           {Table(["Name","Role","Monthly Salary","Status"],
             (d.rows||[]).map(function(e){return <tr key={e.id}><td>{e.name}</td><td>{e.role||"—"}</td><td>{fmtRupee(e.salary)}</td><td>{e.active?"Active":"Inactive"}</td></tr>;})
-          )}
+          , "Staff Salary")}
           <div className="report-totals">Total Monthly Payroll: <b>{fmtRupee((d.rows||[]).filter(function(e){return e.active;}).reduce(function(s,e){return s+e.salary;},0))}</b></div>
         </>)}
 
@@ -3253,7 +3315,7 @@ function ReportViewer(props) {
           {Header("Maintenance Slab History")}
           {Table(["Period","1 BHK","2 BHK","3 BHK"],
             (d.rows||[]).map(function(s){return <tr key={s.id}><td>{monthLabel(s.start_month)} — {s.end_month?monthLabel(s.end_month):"Present"}</td><td>{fmtRupee(s.charge_1bhk)}</td><td>{fmtRupee(s.charge_2bhk)}</td><td>{fmtRupee(s.charge_3bhk)}</td></tr>;})
-          )}
+          , "Slab History")}
         </>)}
 
         {/* 15. EB Summary */}
@@ -3261,7 +3323,7 @@ function ReportViewer(props) {
           {Header("EB / Utility Summary","Block-wise electricity service numbers")}
           {Table(["Block","EB Service Number","Notes"],
             (d.rows||[]).map(function(e){return <tr key={e.id}><td>{e.block_name}</td><td style={{fontFamily:"monospace"}}>{e.service_no}</td><td>{e.notes||"—"}</td></tr>;})
-          )}
+          , "EB Details")}
         </>)}
 
       </div>
