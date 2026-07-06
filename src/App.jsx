@@ -539,10 +539,13 @@ export default function App() {
 
   // ── Resident portal (owner/tenant) — loads own flat data only
   if (userProfile && (userProfile.role==="owner"||userProfile.role==="tenant")) {
-    return <ResidentPortal profile={userProfile} onLogout={function(){
-      localStorage.removeItem("pallazo_temp_session");
-      setSession(null); setUserProfile(null);
-    }}/>;
+    return <ResidentPortal
+      profile={userProfile}
+      sharedProps={userProfile.role==="owner" ? sharedProps : null}
+      onLogout={function(){
+        localStorage.removeItem("pallazo_temp_session");
+        setSession(null); setUserProfile(null);
+      }}/>;
   }
 
   if (dataLoading || flats.length === 0) return <LoadingScreen msg="Loading apartment data…" dots retry={function(){ loadData(); }}/>;
@@ -568,7 +571,15 @@ export default function App() {
   }
   function getStatusForFlat(flatId) {
     var b = getBillForFlat(flatId);
-    return b ? b.status : "overdue";
+    if (!b) {
+      // No bill exists — only show as overdue if current/past month after 15th
+      var today = new Date();
+      var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+      if (selMonth > curMonth) return "pending"; // future month — no status
+      if (selMonth === curMonth && today.getDate() <= 15) return "pending"; // before due date
+      return "overdue";
+    }
+    return b.status;
   }
 
   // ── Overdue: from overdue_summary view (only overdue rows) ────
@@ -636,7 +647,10 @@ export default function App() {
         </div>
         <div className="hdr-btns">
           <button className="icon-btn" onClick={function(){setShowAdminPass(true);}} title="Change Password">🔒</button>
-          <button className="icon-btn" onClick={function(){showToast("🔔 Coming soon");}}>🔔</button>
+          <button className="icon-btn" style={{position:"relative"}} onClick={function(){setTab("approvals");}} title="Notifications">
+            🔔
+            {pendingCount>0&&<span style={{position:"absolute",top:2,right:2,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 4px",minWidth:14,textAlign:"center"}}>{pendingCount}</span>}
+          </button>
           <button className="icon-btn" onClick={handleLogout} title="Logout">🚪</button>
         </div>
       </header>
@@ -683,9 +697,24 @@ export default function App() {
                 <div className="ab-detail">{monthLabel(selMonth)} charge: {fmtRupee(selFlat.monthly_charge)} · Status: {getStatusForFlat(selFlat.id)}</div>
               </div>
               <div className="card mb14">
-                {[["Flat",selFlat.flat_no],["Type",selFlat.bhk_type],["Block",selFlat.block],["Monthly Charge",fmtRupee(selFlat.monthly_charge)],["Status",getStatusForFlat(selFlat.id)]].map(function(row){
+                {[["Flat",selFlat.flat_no],["Type",selFlat.bhk_type],["Block",selFlat.block],["Monthly Charge",fmtRupee(selFlat.monthly_charge)]].map(function(row){
                   return (<div key={row[0]} className="info-row"><span className="ir-label">{row[0]}</span><span className="ir-value">{row[1]}</span></div>);
                 })}
+                <div className="info-row">
+                  <span className="ir-label">Occupancy</span>
+                  <span className="ir-value" style={{display:"flex",alignItems:"center",gap:8}}>
+                    {selFlat.occupancy==="owner"?"Owner Occupied":"Rented / Tenant"}
+                    <button onClick={async function(){
+                      var newOcc = selFlat.occupancy==="owner"?"rented":"owner";
+                      await supabase.from("flats").update({occupancy:newOcc}).eq("id",selFlat.id);
+                      showToast("Updated to "+(newOcc==="owner"?"Owner Occupied":"Rented"));
+                      await loadData();
+                      setSelFlat(null);
+                    }} style={{fontSize:10,padding:"2px 8px",border:"1.5px solid var(--gold)",borderRadius:6,background:"transparent",color:"var(--gold)",cursor:"pointer",fontWeight:600}}>
+                      Toggle
+                    </button>
+                  </span>
+                </div>
               </div>
               {overdueByFlat[selFlat.id] && overdueByFlat[selFlat.id].length > 0 && (
                 <>
@@ -1090,15 +1119,20 @@ function FlatsTab(props) {
           {props.filteredFlats.map(function(f) {
             var st = props.getStatusForFlat(f.id);
             var bill = props.getBillForFlat(f.id);
-            var displaySt = (st === "no-data") ? "paid" : st; // no bill = treat as paid for display
+            var displaySt = (st === "pending") ? "pending" : st;
             return (
               <div key={f.id} className="flat-item" onClick={function(){props.setSelFlat(f);}}>
-                <div className="fi-left"><div className={"fi-avatar "+displaySt}>{f.flat_no}</div><div><div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div><div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner Occupied":"Rented"}</div></div></div>
+                <div className="fi-left">
+                  <div className={"fi-avatar "+(displaySt==="paid"?"paid":displaySt==="overdue"?"overdue":"vacant")}>{f.flat_no}</div>
+                  <div>
+                    <div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div>
+                    <div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner Occupied":"Rented"}</div>
+                  </div>
+                </div>
                 <div className="fi-right">
-                  {displaySt==="paid"
-                    ? <div className="fi-amount paid">{fmtRupee(bill?bill.total_amount:f.monthly_charge)}</div>
-                    : <div className={"fi-amount "+displaySt}>{fmtRupee(bill&&bill.arrears?bill.arrears:f.monthly_charge)}</div>}
-                  <div className={"chip "+displaySt}>{displaySt==="paid"?"Paid":"Overdue"}</div>
+                  {displaySt==="paid" && <><div className="fi-amount paid">{fmtRupee(bill?bill.total_amount:f.monthly_charge)}</div><div className="chip paid">Paid</div></>}
+                  {displaySt==="overdue" && <><div className="fi-amount overdue">{fmtRupee(bill&&bill.arrears?bill.arrears:f.monthly_charge)}</div><div className="chip overdue">Overdue</div></>}
+                  {displaySt==="pending" && <><div className="fi-amount" style={{color:"var(--muted)"}}>{fmtRupee(f.monthly_charge)}</div><div className="chip vacant">Not Due Yet</div></>}
                 </div>
               </div>
             );
@@ -1301,7 +1335,7 @@ function IncomeTab(props) {
         <div style={{padding:"10px 16px 24px"}}>
           <div className="row-between mb14" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).length} records</div>
-            <button className="add-btn" onClick={function(){openAdd("other");}}>＋ Add Income</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("other");}}>＋ Add Income</button>}
           </div>
           <div className="card">
             {props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).map(function(item,i){
@@ -1312,10 +1346,10 @@ function IncomeTab(props) {
                   <div className="income-info"><div className="income-src">{item.source}</div><div className="income-date">{item.received_date||"Date not recorded"}</div></div>
                   <div style={{textAlign:"right"}}>
                     <div className="income-amt">{fmtRupee(item.amount)}</div>
-                    <div style={{display:"flex",gap:4,marginTop:4}}>
+                    {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4}}>
                       <button onClick={function(){openEdit("other",item);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
                       <button onClick={function(){deleteItem("other_income",item.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
-                    </div>
+                    </div>}
                   </div>
                 </div>
               );
@@ -1334,7 +1368,7 @@ function IncomeTab(props) {
           </div>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.corpusData.length} entries</div>
-            <button className="add-btn" onClick={function(){openAdd("corpus");}}>＋ Add Entry</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("corpus");}}>＋ Add Entry</button>}
           </div>
           <div className="card">
             {props.corpusData.map(function(c,i){
@@ -1343,10 +1377,10 @@ function IncomeTab(props) {
                   <div><div className="corpus-flat">Flat {c.flat_id}</div><div className="corpus-date">{c.paid_date||"—"} · {c.mode||"—"}</div></div>
                   <div style={{textAlign:"right"}}>
                     <div className="corpus-amt">{fmtRupee(c.amount)}</div>
-                    <div style={{display:"flex",gap:4,marginTop:4}}>
+                    {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4}}>
                       <button onClick={function(){openEdit("corpus",c);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
                       <button onClick={function(){deleteItem("corpus_payments",c.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
-                    </div>
+                    </div>}
                   </div>
                 </div>
               );
@@ -1360,7 +1394,7 @@ function IncomeTab(props) {
         <div style={{padding:"10px 16px 24px"}}>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.fdData.length} FD account{props.fdData.length!==1?"s":""}</div>
-            <button className="add-btn" onClick={function(){openAdd("fd");}}>＋ Add FD</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("fd");}}>＋ Add FD</button>}
           </div>
           {props.fdData.map(function(fd,i){
             return (
@@ -1510,7 +1544,7 @@ function ExpensesTab(props) {
       <div className="section row-between">
         <div className="sec-title" style={{marginBottom:0}}>{viewAll?"All Expenses ("+props.allExpenses.length+")":monthLabel(props.selMonth)+" ("+props.monthExp.length+")"}</div>
         <div style={{display:"flex",gap:8}}>
-          <button className="add-btn" onClick={openAdd}>＋ Add</button>
+          {!props.readOnly && <button className="add-btn" onClick={openAdd}>＋ Add</button>}
           <button className="add-btn" style={{background:viewAll?"var(--muted)":"var(--gold)"}} onClick={function(){setViewAll(function(v){return !v;});}}>
             {viewAll?"📅 Month":"📋 All"}
           </button>
@@ -1528,10 +1562,10 @@ function ExpensesTab(props) {
                 <div className="exp-right" style={{textAlign:"right"}}>
                   <div className="exp-amount">{fmtRupee(e.amount)}</div>
                   <div className="exp-date">{e.expense_date}</div>
-                  <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
+                  {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
                     <button onClick={function(){openEdit(e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️ Edit</button>
                     <button onClick={function(){deleteExpense(e);}} disabled={deleting===e.id} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
-                  </div>
+                  </div>}
                 </div>
               </div>
             );
@@ -1734,10 +1768,10 @@ function InfoTab(props) {
                         <div style={{fontWeight:700,fontSize:14}}>{monthLabel(s.start_month)} → {s.end_month?monthLabel(s.end_month):<span style={{color:"var(--green)",fontWeight:700}}>Present</span>}</div>
                         <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Active slab</div>
                       </div>
-                      <div style={{display:"flex",gap:6}}>
+                      {!props.readOnly && <div style={{display:"flex",gap:6}}>
                         <button onClick={function(){openEdit("slab",s);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
                         <button onClick={function(){deleteItem("maintenance_slabs",s.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--red)"}}>🗑</button>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
                       {[["1 BHK","₹"+s.charge_1bhk],["2 BHK","₹"+s.charge_2bhk],["3 BHK","₹"+s.charge_3bhk]].map(function(x){
@@ -1965,7 +1999,10 @@ function ResidentPortal(props) {
   var [passForm, setPassForm] = useState({current:"",next:"",confirm:""});
   var [passSaving, setPassSaving] = useState(false);
   var [passErr, setPassErr] = useState("");
+  var [pendingCount, setPendingCount] = useState(0);
   var flatId = props.profile.flat_id;
+  var isOwner = props.profile.role === "owner";
+  var sp = props.sharedProps; // full admin data for owner view (null for tenant)
 
   async function changePassword() {
     setPassErr("");
@@ -1989,6 +2026,15 @@ function ResidentPortal(props) {
 
   useEffect(function(){
     loadResidentData();
+    if (isOwner) {
+      // Load full admin data for owner's extended tabs
+      if (props.sharedProps && props.sharedProps.allExpenses && props.sharedProps.allExpenses.length === 0) {
+        // Data not loaded yet — trigger reload via the parent's loadData
+        // sharedProps is passed live from parent so it auto-updates
+      }
+      supabase.from("pending_approvals_summary").select("*").single()
+        .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
+    }
   },[]);
 
   async function loadResidentData(){
@@ -2154,15 +2200,45 @@ function ResidentPortal(props) {
               </div>
             </div>
           </>)}
+
+          {/* OWNER EXTENDED TABS — read-only views of admin data */}
+          {tab==="income"   && isOwner && sp && <IncomeTab   {...sp} reload={function(){}} readOnly/>}
+          {tab==="expenses" && isOwner && sp && <ExpensesTab {...sp} reload={function(){}} readOnly/>}
+          {tab==="reports"  && isOwner && sp && <ReportsTab  {...sp}/>}
+          {tab==="approvals"&& isOwner && (
+            <ApprovalsTab {...(sp||{})}
+              showToast={showToast}
+              userProfile={props.profile}
+              reload={function(){
+                supabase.from("pending_approvals_summary").select("*").single()
+                  .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
+              }}
+              ownerFlatId={flatId}
+              aptInfo={sp?sp.aptInfo:{}}
+            />
+          )}
+          {tab==="info" && (
+            isOwner && sp
+              ? <InfoTab {...sp} reload={function(){}} readOnly/>
+              : <TenantInfoTab aptInfo={sp?sp.aptInfo:{}} maintenanceSlabs={sp?sp.maintenanceSlabs:[]}/>
+          )}
         </div>
 
-        <nav className="res-tabs">
-          {[{id:"home",icon:"🏠",label:"Home"},{id:"history",icon:"📜",label:"History"},{id:"notifications",icon:"🔔",label:"Alerts",badge:unreadNotif}].map(function(t){
-            return <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative"}}>
-              <span className="tab-icon">{t.icon}</span>{t.label}
-              {t.badge>0&&<span style={{position:"absolute",top:6,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 5px"}}>{t.badge}</span>}
-            </button>;
-          })}
+        <nav className="res-tabs" style={{overflowX:"auto",justifyContent:"flex-start"}}>
+          {(function(){
+            var baseTabs = [{id:"home",icon:"🏠",label:"Home"},{id:"history",icon:"📜",label:"History"},{id:"notifications",icon:"🔔",label:"Alerts",badge:unreadNotif}];
+            var ownerTabs = [{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"approvals",icon:"✅",label:"Approvals",badge:pendingCount}];
+            var tenantTabs = [{id:"info",icon:"ℹ️",label:"Info"}];
+            var allTabs = props.profile.role==="owner"
+              ? baseTabs.concat(ownerTabs)
+              : baseTabs.concat(tenantTabs);
+            return allTabs.map(function(t){
+              return <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:60,flexShrink:0}}>
+                <span className="tab-icon">{t.icon}</span>{t.label}
+                {t.badge>0&&<span style={{position:"absolute",top:6,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 5px"}}>{t.badge}</span>}
+              </button>;
+            });
+          })()}
         </nav>
 
         {/* Pay submission sheet */}
@@ -2294,11 +2370,16 @@ function ApprovalsTab(props) {
 
   async function loadApprovals(){
     setLoading(true);
-    var [r, p, u] = await Promise.all([
-      supabase.from("registration_requests").select("*").order("created_at",{ascending:false}),
-      supabase.from("payment_submissions").select("*").order("created_at",{ascending:false}),
-      supabase.from("resident_users").select("*").order("created_at",{ascending:false}),
-    ]);
+    var rq = supabase.from("registration_requests").select("*").order("created_at",{ascending:false});
+    var pq = supabase.from("payment_submissions").select("*").order("created_at",{ascending:false});
+    var uq = supabase.from("resident_users").select("*,admin_group(is_super_admin)").order("created_at",{ascending:false});
+    // If owner mode — filter to own flat only
+    if (props.ownerFlatId) {
+      rq = rq.eq("flat_id", props.ownerFlatId);
+      pq = pq.eq("flat_id", props.ownerFlatId);
+      uq = uq.eq("flat_id", props.ownerFlatId);
+    }
+    var [r, p, u] = await Promise.all([rq, pq, uq]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayments(p.data);
     if(u.data) setResidents(u.data);
@@ -2306,22 +2387,72 @@ function ApprovalsTab(props) {
   }
 
   async function approveRegistration(req){
-    // Create resident user
+    // Check if already approved (prevent duplicate approvals)
+    var existing = await supabase.from("resident_users").select("id").eq("phone",req.phone).single();
+    if (!existing.error && existing.data) {
+      // Already exists — just update request status and show WhatsApp
+      await supabase.from("registration_requests").update({status:"approved",approved_at:new Date().toISOString()}).eq("id",req.id);
+      props.showToast("ℹ️ User already exists — request marked approved");
+      triggerWhatsApp(req, existing.data.id);
+      await loadApprovals();
+      return;
+    }
+    // Create resident user — use select() to get back the ID
     var res = await supabase.from("resident_users").insert({
       flat_id:req.flat_id, name:req.name, phone:req.phone,
       password_hash:req.password_hash, role:req.role, status:"active"
-    });
+    }).select().single();
     if(res.error){ props.showToast("❌ "+res.error.message); return; }
-    // Update request
-    await supabase.from("registration_requests").update({status:"approved",approved_by:props.userProfile?.id,approved_at:new Date().toISOString()}).eq("id",req.id);
-    // Notify user
-    await supabase.from("notifications").insert({user_id:res.data?.[0]?.id,type:"welcome",title:"Welcome to Antony Pallazo! 🎉",body:"Your account has been approved. You can now login with your mobile number and password.",data:{flat_id:req.flat_id}});
-    // WhatsApp deep link
-    var msg = "Hello "+req.name+"! 👋\n\nWelcome to Antony Pallazo Apartment! 🏛\n\nYour resident account has been approved.\n\nFlat: "+req.flat_id+"\nRole: "+req.role+"\nLogin: antony-pallazo.vercel.app\nUsername: "+req.phone+"\n\nWelcome aboard! 🎉";
-    setWhatsappMsg({phone:req.phone, msg:msg, name:req.name});
+    var newUserId = res.data.id;
+    // Update request status
+    await supabase.from("registration_requests").update({
+      status:"approved",
+      approved_by:props.userProfile?.id||null,
+      approved_at:new Date().toISOString()
+    }).eq("id",req.id);
+    // In-app notification
+    await supabase.from("notifications").insert({
+      user_id:newUserId, type:"welcome",
+      title:"Welcome to Antony Pallazo! 🎉",
+      body:"Your account has been approved. Login with your mobile number: "+req.phone,
+      data:{flat_id:req.flat_id}
+    });
     props.showToast("✅ "+req.name+" approved!");
+    triggerWhatsApp(req, newUserId);
     await loadApprovals();
     await props.reload();
+  }
+
+  function triggerWhatsApp(req, userId) {
+    // Get maintenance amount for flat's BHK type
+    var flatBHKMap = {"A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK","B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK","C1":"2BHK","C2":"2BHK","C3":"2BHK","C4":"1BHK","C5":"2BHK","C6":"2BHK","D1D2":"3BHK","D3":"2BHK","D4":"1BHK","D5":"1BHK","E1":"2BHK","E2":"3BHK","E3":"1BHK","E4":"2BHK","F1":"2BHK","F2":"2BHK","F3":"2BHK","F4":"2BHK"};
+    var bhkCharges = {"3BHK":"₹2,000","2BHK":"₹1,800","1BHK":"₹1,600"};
+    var bhk = flatBHKMap[req.flat_id] || "2BHK";
+    var charge = bhkCharges[bhk] || "₹1,800";
+    var aptInfo = props.aptInfo || {};
+    var msg = [
+      "Hello "+req.name+"! 👋",
+      "",
+      "Welcome to Antony Pallazo Apartment! 🏛",
+      "Your resident account has been approved.",
+      "",
+      "🏠 Flat: "+req.flat_id+" ("+bhk+")",
+      "👤 Role: "+req.role,
+      "📱 Login: antony-pallazo.vercel.app",
+      "🔑 Username: "+req.phone,
+      "",
+      "💰 Monthly Maintenance: "+charge+" (due by 10th of every month)",
+      "",
+      "🏦 Payment Details:",
+      "Account Name: "+(aptInfo.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION"),
+      "Account No: "+(aptInfo.acc_no||"270201000458"),
+      "Bank: "+(aptInfo.bank_name||"ICICI BANK LTD")+" | Branch: "+(aptInfo.branch||"KOVILAMBAKKAM"),
+      "IFSC: "+(aptInfo.ifsc||"ICIC0002702"),
+      "UPI: "+(aptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"),
+      "",
+      "Welcome aboard! 🎉"
+    ].join("\n");
+    setWhatsappMsg({phone:req.phone, msg:msg, name:req.name});
   }
 
   async function rejectRegistration(req, reason){
@@ -2363,6 +2494,10 @@ function ApprovalsTab(props) {
       props.showToast("✅ "+user.name+" is now an Admin");
     }
     await loadApprovals();
+  }
+
+  function isUserAdmin(user) {
+    return user.admin_group && Array.isArray(user.admin_group) && user.admin_group.length > 0;
   }
 
   async function deleteResident(user){
@@ -2467,7 +2602,7 @@ function ApprovalsTab(props) {
           </div>
           <div className="card">
             {residents.map(function(u){
-              var isAdmin = u.is_admin;
+              var isAdmin = isUserAdmin(u);
               return (
                 <div key={u.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -3343,6 +3478,46 @@ function ReportViewer(props) {
           , "EB Details")}
         </>)}
 
+      </div>
+    </div>
+  );
+}
+
+// ── TenantInfoTab — only maintenance + bank details ───────────
+function TenantInfoTab(props) {
+  var slabs = props.maintenanceSlabs || [];
+  var aptInfo = props.aptInfo || {};
+  // Current slab (no end_month)
+  var curSlab = slabs.filter(function(s){return !s.end_month;}).sort(function(a,b){return b.start_month.localeCompare(a.start_month);})[0] || slabs[slabs.length-1];
+
+  return (
+    <div style={{padding:"14px 16px 24px"}}>
+      <div style={{background:"linear-gradient(135deg,#1A1410,#2C2018)",borderRadius:16,padding:"16px 18px",marginBottom:16}}>
+        <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}}>Current Maintenance Charges</div>
+        {curSlab ? (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginTop:8}}>
+            {[["1 BHK","₹"+curSlab.charge_1bhk.toLocaleString("en-IN")],["2 BHK","₹"+curSlab.charge_2bhk.toLocaleString("en-IN")],["3 BHK","₹"+curSlab.charge_3bhk.toLocaleString("en-IN")]].map(function(x){
+              return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:16,marginTop:2}}>{x[1]}</div></div>;
+            })}
+          </div>
+        ) : <div style={{color:"rgba(255,255,255,.5)",fontSize:13}}>Contact admin for current charges</div>}
+        <div style={{color:"rgba(255,255,255,.4)",fontSize:11,marginTop:10}}>Due by {aptInfo.due_day||"10"}th of every month</div>
+      </div>
+
+      <div style={{fontSize:12,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:8}}>Payment Details</div>
+      <div className="card">
+        <div style={{background:"linear-gradient(135deg,#0A2A4A,#0D3B6E)",borderRadius:12,padding:"14px 16px",marginBottom:2}}>
+          <div style={{color:"rgba(255,255,255,.5)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:6}}>Association Bank Account</div>
+          <div style={{color:"#FFF",fontSize:13,fontWeight:700,lineHeight:1.5}}>{aptInfo.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION"}</div>
+        </div>
+        {[["Account Number",aptInfo.acc_no||"270201000458"],["Bank",aptInfo.bank_name||"ICICI BANK LTD"],["Branch",aptInfo.branch||"KOVILAMBAKKAM"],["IFSC Code",aptInfo.ifsc||"ICIC0002702"],["UPI ID",aptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"]].map(function(row){
+          return (
+            <div key={row[0]} className="info-row" style={{flexWrap:"wrap",gap:4}}>
+              <span className="ir-label" style={{flexShrink:0,minWidth:110}}>{row[0]}</span>
+              <span className="ir-value" style={{wordBreak:"break-all",fontFamily:row[0]==="Account Number"||row[0]==="IFSC Code"?"monospace":"inherit"}}>{row[1]}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
