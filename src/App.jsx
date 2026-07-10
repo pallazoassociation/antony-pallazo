@@ -301,8 +301,7 @@ export default function App() {
   var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0],payType:"current",months:[]});
 
   // Auto-generate bills for a new month when it doesn't exist yet
-  var autoGenBills = useCallback(async function(month, summary) {
-    if (summary) return; // bills already exist for this month
+  var autoGenBills = useCallback(async function(month) {
     var FLAT_BHK = {
       "A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK",
       "B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK",
@@ -316,46 +315,66 @@ export default function App() {
     var dueM = m===12?"01":String(m+1).padStart(2,"0");
     var dueY = m===12?y+1:y;
     var dueDate = dueY+"-"+dueM+"-10";
+    var today = new Date();
+    var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+    // Only set arrears if this is a past/current month after 15th
+    var isOverdue = (month < curMonth) || (month === curMonth && today.getDate() > 15);
     var rows = Object.entries(FLAT_BHK).map(function(e){
       var charge = CHARGES[e[1]];
-      return {flat_id:e[0],billing_month:month,total_amount:charge,arrears:charge,due_date:dueDate,status:"overdue"};
+      return {flat_id:e[0], billing_month:month, total_amount:charge,
+              arrears: isOverdue ? charge : 0,
+              due_date:dueDate, status:"overdue"};
     });
-    await supabase.from("bills").upsert(rows, {onConflict:"flat_id,billing_month",ignoreDuplicates:true});
-    console.log("Auto-generated bills for "+month);
+    await supabase.from("bills").upsert(rows, {onConflict:"flat_id,billing_month", ignoreDuplicates:true});
+    console.log("Auto-generated bills for "+month+" (isOverdue:"+isOverdue+")");
   }, []);
 
   // loadMonthData: fetch bills only for the selected month (30 rows max)
   var loadMonthData = useCallback(async function(month) {
-    var result = await supabase
-      .from("flat_month_status")
-      .select("*")
-      .eq("billing_month", month);
-    if (result.data && result.data.length > 0) {
-      // Auto-mark overdue if today > 15th and this is current month
-      var today = new Date();
-      var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
-      if (month === curMonth && today.getDate() > 15) {
-        var needsUpdate = result.data.filter(function(b){ return b.status==="overdue" && (!b.arrears||b.arrears===0); });
+    var today = new Date();
+    var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+    var isFuture = month > curMonth;
+    var isCurrent = month === curMonth;
+    var isAfter15 = today.getDate() > 15;
+
+    var result = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
+
+    if (!result.data || result.data.length === 0) {
+      // No bills — auto-generate (correct arrears based on month)
+      await autoGenBills(month);
+      result = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
+      var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
+      if (s.data) setMonthlySummaries(s.data);
+    } else if (!isFuture) {
+      // Bills exist — for current month after 15th, ensure arrears are set
+      if (isCurrent && isAfter15) {
+        var needsUpdate = result.data.filter(function(b){
+          return b.status==="overdue" && (!b.arrears || b.arrears===0);
+        });
         if (needsUpdate.length > 0) {
-          for (var i=0; i<needsUpdate.length; i++) {
-            await supabase.from("bills").update({arrears: needsUpdate[i].total_amount})
-              .eq("flat_id",needsUpdate[i].flat_id).eq("billing_month",month);
-          }
+          await Promise.all(needsUpdate.map(function(b){
+            return supabase.from("bills").update({arrears:b.total_amount})
+              .eq("flat_id",b.flat_id).eq("billing_month",month);
+          }));
           result = await supabase.from("flat_month_status").select("*").eq("billing_month",month);
           // Refresh overdue summary
           var ov = await supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month");
           if (ov.data) setOverdueBills(ov.data);
         }
       }
-      setMonthBillsData(result.data);
-    } else {
-      // No bills for this month — auto-generate them
-      await autoGenBills(month, null);
-      var result2 = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
-      if (result2.data) setMonthBillsData(result2.data);
-      var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
-      if (s.data) setMonthlySummaries(s.data);
+      // For future months — clear any arrears (should never show as overdue)
+    } else if (isFuture) {
+      // Fix any future bills wrongly showing arrears
+      var wrongBills = result.data.filter(function(b){return (b.arrears||0) > 0 && b.status==="overdue";});
+      if (wrongBills.length > 0) {
+        await Promise.all(wrongBills.map(function(b){
+          return supabase.from("bills").update({arrears:0}).eq("flat_id",b.flat_id).eq("billing_month",month);
+        }));
+        result = await supabase.from("flat_month_status").select("*").eq("billing_month",month);
+      }
     }
+
+    if (result.data) setMonthBillsData(result.data);
   }, [autoGenBills]);
 
   var loadData = useCallback(async function() {
@@ -537,11 +556,34 @@ export default function App() {
     setSession(s);
   }}/>;
 
-  // ── Resident portal (owner/tenant) — loads own flat data only
+  // ── Resident portal (owner/tenant) ────────────────────────────
   if (userProfile && (userProfile.role==="owner"||userProfile.role==="tenant")) {
+    // For owners: trigger loadData so sharedProps has income/expense/reports data
+    // This runs once when owner logs in (session effect already calls loadData)
+    var ownerSharedProps = null;
+    if (userProfile.role==="owner" && flats.length > 0) {
+      // Data is loaded — build a safe read-only sharedProps for owner
+      ownerSharedProps = {
+        flats, monthlySummaries, monthBillsData, overdueBills, allPayments, allExpenses,
+        otherIncome, corpusData, fdData, acctSettings,
+        bankBal: parseFloat((liveBalance||{}).net_bank_balance||acctSettings.net_bank_balance||0),
+        activeFD: parseFloat((liveBalance||{}).active_fd_amount||acctSettings.active_fd_amount||0),
+        totalMaint: parseFloat((liveBalance||{}).total_maintenance||acctSettings.total_maintenance||0),
+        totalCorpus: parseFloat((liveBalance||{}).total_corpus||acctSettings.total_corpus||0),
+        totalOtherInc: parseFloat((liveBalance||{}).total_other_income||acctSettings.total_other_income||0),
+        fdMatured: parseFloat((liveBalance||{}).total_fd_matured||acctSettings.total_fd_matured||0),
+        totalExpAmt: parseFloat((liveBalance||{}).total_expenses||acctSettings.total_expenses||0),
+        totalIncome: 0,
+        maintenanceSlabs, ebDetails, employeeDetails, aptInfo,
+        showToast: function(msg){ /* no-op for now */ },
+        selMonth: getCurrentMonth(), setSelMonth: function(){},
+        userProfile: userProfile,
+        pendingCount: pendingCount,
+      };
+    }
     return <ResidentPortal
       profile={userProfile}
-      sharedProps={userProfile.role==="owner" ? sharedProps : null}
+      sharedProps={ownerSharedProps}
       onLogout={function(){
         localStorage.removeItem("pallazo_temp_session");
         setSession(null); setUserProfile(null);
@@ -2387,49 +2429,49 @@ function ApprovalsTab(props) {
   }
 
   async function approveRegistration(req){
-    // Check if already approved (prevent duplicate approvals)
-    var existing = await supabase.from("resident_users").select("id").eq("phone",req.phone).single();
+    // Prevent duplicate - check if already approved
+    var existing = await supabase.from("resident_users").select("id,name").eq("phone",req.phone).single();
     if (!existing.error && existing.data) {
-      // Already exists — just update request status and show WhatsApp
-      await supabase.from("registration_requests").update({status:"approved",approved_at:new Date().toISOString()}).eq("id",req.id);
-      props.showToast("ℹ️ User already exists — request marked approved");
-      triggerWhatsApp(req, existing.data.id);
+      // Already exists - just mark request approved and show WhatsApp
+      await supabase.from("registration_requests")
+        .update({status:"approved", approved_by:props.userProfile?.id||null, approved_at:new Date().toISOString()})
+        .eq("id",req.id);
+      props.showToast("✅ User already exists - request marked approved");
+      triggerWhatsApp(req);
       await loadApprovals();
       return;
     }
-    // Create resident user — use select() to get back the ID
+    // Insert new user
     var res = await supabase.from("resident_users").insert({
       flat_id:req.flat_id, name:req.name, phone:req.phone,
       password_hash:req.password_hash, role:req.role, status:"active"
-    }).select().single();
+    }).select("id").single();
     if(res.error){ props.showToast("❌ "+res.error.message); return; }
     var newUserId = res.data.id;
     // Update request status
-    await supabase.from("registration_requests").update({
-      status:"approved",
-      approved_by:props.userProfile?.id||null,
-      approved_at:new Date().toISOString()
-    }).eq("id",req.id);
-    // In-app notification
+    var upd = await supabase.from("registration_requests")
+      .update({status:"approved", approved_by:props.userProfile?.id||null, approved_at:new Date().toISOString()})
+      .eq("id",req.id);
+    if(upd.error){ props.showToast("⚠️ User created but status update failed: "+upd.error.message); }
+    // Send in-app notification to new user
     await supabase.from("notifications").insert({
       user_id:newUserId, type:"welcome",
       title:"Welcome to Antony Pallazo! 🎉",
-      body:"Your account has been approved. Login with your mobile number: "+req.phone,
+      body:"Your account has been approved. Login at antony-pallazo.vercel.app with "+req.phone,
       data:{flat_id:req.flat_id}
     });
-    props.showToast("✅ "+req.name+" approved!");
-    triggerWhatsApp(req, newUserId);
+    props.showToast("✅ "+req.name+" approved successfully!");
+    triggerWhatsApp(req);
     await loadApprovals();
     await props.reload();
   }
 
-  function triggerWhatsApp(req, userId) {
-    // Get maintenance amount for flat's BHK type
+  function triggerWhatsApp(req) {
     var flatBHKMap = {"A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK","B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK","C1":"2BHK","C2":"2BHK","C3":"2BHK","C4":"1BHK","C5":"2BHK","C6":"2BHK","D1D2":"3BHK","D3":"2BHK","D4":"1BHK","D5":"1BHK","E1":"2BHK","E2":"3BHK","E3":"1BHK","E4":"2BHK","F1":"2BHK","F2":"2BHK","F3":"2BHK","F4":"2BHK"};
     var bhkCharges = {"3BHK":"₹2,000","2BHK":"₹1,800","1BHK":"₹1,600"};
-    var bhk = flatBHKMap[req.flat_id] || "2BHK";
-    var charge = bhkCharges[bhk] || "₹1,800";
-    var aptInfo = props.aptInfo || {};
+    var bhk = flatBHKMap[req.flat_id]||"2BHK";
+    var charge = bhkCharges[bhk]||"₹1,800";
+    var ai = props.aptInfo||{};
     var msg = [
       "Hello "+req.name+"! 👋",
       "",
@@ -2437,19 +2479,21 @@ function ApprovalsTab(props) {
       "Your resident account has been approved.",
       "",
       "🏠 Flat: "+req.flat_id+" ("+bhk+")",
-      "👤 Role: "+req.role,
-      "📱 Login: antony-pallazo.vercel.app",
-      "🔑 Username: "+req.phone,
+      "👤 Role: "+(req.role==="owner"?"Resident Owner":"Resident Tenant"),
+      "📱 App Login: antony-pallazo.vercel.app",
+      "🔑 Username (Mobile): "+req.phone,
       "",
-      "💰 Monthly Maintenance: "+charge+" (due by 10th of every month)",
+      "💰 Monthly Maintenance: "+charge,
+      "📅 Due by: "+((ai.due_day)||"10")+"th of every month",
       "",
-      "🏦 Payment Details:",
-      "Account Name: "+(aptInfo.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION"),
-      "Account No: "+(aptInfo.acc_no||"270201000458"),
-      "Bank: "+(aptInfo.bank_name||"ICICI BANK LTD")+" | Branch: "+(aptInfo.branch||"KOVILAMBAKKAM"),
-      "IFSC: "+(aptInfo.ifsc||"ICIC0002702"),
-      "UPI: "+(aptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"),
+      "🏦 Antony Pallazo Bank Details:",
+      "Account Name: "+(ai.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION – MEDAVAKKAM"),
+      "Account No: "+(ai.acc_no||"270201000458"),
+      "Bank: "+(ai.bank_name||"ICICI BANK LTD")+" | Branch: "+(ai.branch||"KOVILAMBAKKAM"),
+      "IFSC Code: "+(ai.ifsc||"ICIC0002702"),
+      "UPI ID: "+(ai.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"),
       "",
+      "Please pay maintenance on time to avoid overdue charges.",
       "Welcome aboard! 🎉"
     ].join("\n");
     setWhatsappMsg({phone:req.phone, msg:msg, name:req.name});
