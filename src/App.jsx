@@ -612,15 +612,18 @@ export default function App() {
     return monthBills.find(function(b){ return b.flat_id === flatId; }) || null;
   }
   function getStatusForFlat(flatId) {
+    var today = new Date();
+    var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+    // Future months ALWAYS show as pending — regardless of what's in DB
+    if (selMonth > curMonth) return "pending";
+    // Current month before 15th — unpaid shows as pending not overdue
     var b = getBillForFlat(flatId);
     if (!b) {
-      // No bill exists — only show as overdue if current/past month after 15th
-      var today = new Date();
-      var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
-      if (selMonth > curMonth) return "pending"; // future month — no status
-      if (selMonth === curMonth && today.getDate() <= 15) return "pending"; // before due date
+      if (selMonth === curMonth && today.getDate() <= 15) return "pending";
       return "overdue";
     }
+    // Current month before 15th — don't show overdue yet
+    if (selMonth === curMonth && today.getDate() <= 15 && b.status === "overdue") return "pending";
     return b.status;
   }
 
@@ -1389,8 +1392,8 @@ function IncomeTab(props) {
                   <div style={{textAlign:"right"}}>
                     <div className="income-amt">{fmtRupee(item.amount)}</div>
                     {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4}}>
-                      <button onClick={function(){openEdit("other",item);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
-                      <button onClick={function(){deleteItem("other_income",item.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                      {!props.readOnly && <button onClick={function(){openEdit("other",item);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>}
+                      {!props.readOnly && <button onClick={function(){deleteItem("other_income",item.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>}
                     </div>}
                   </div>
                 </div>
@@ -1420,8 +1423,8 @@ function IncomeTab(props) {
                   <div style={{textAlign:"right"}}>
                     <div className="corpus-amt">{fmtRupee(c.amount)}</div>
                     {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4}}>
-                      <button onClick={function(){openEdit("corpus",c);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
-                      <button onClick={function(){deleteItem("corpus_payments",c.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                      {!props.readOnly && <button onClick={function(){openEdit("corpus",c);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>}
+                      {!props.readOnly && <button onClick={function(){deleteItem("corpus_payments",c.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>}
                     </div>}
                   </div>
                 </div>
@@ -1447,10 +1450,10 @@ function IncomeTab(props) {
                     <div className="fd-amt">{fmtRupee(fd.invested_amount)}</div>
                     <div className={"fd-status "+(fd.status==="matured"?"fd-matured":"fd-active")}>{fd.status==="matured"?"✓ Matured":"⏳ Active"}</div>
                   </div>
-                  <div style={{display:"flex",gap:6,marginTop:4}}>
+                  {!props.readOnly && <div style={{display:"flex",gap:6,marginTop:4}}>
                     <button onClick={function(){openEdit("fd",fd);}} style={{border:"none",background:"rgba(255,255,255,.15)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#FFF"}}>✏️ Edit</button>
                     <button onClick={function(){deleteItem("fixed_deposits",fd.id);}} style={{border:"none",background:"rgba(255,255,255,.15)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#FFC0C0"}}>🗑</button>
-                  </div>
+                  </div>}
                 </div>
                 <div>
                   {[["Invested",fmtRupee(fd.invested_amount)],["Invested Date",fd.invested_date||"—"],["Matured Amount",fd.matured_amount?fmtRupee(fd.matured_amount):"Not yet matured"],["Maturity Date",fd.matured_date||"—"],fd.matured_amount&&["Interest Earned",fmtRupee(fd.matured_amount-fd.invested_amount)]].filter(Boolean).map(function(row){
@@ -1605,7 +1608,7 @@ function ExpensesTab(props) {
                   <div className="exp-amount">{fmtRupee(e.amount)}</div>
                   <div className="exp-date">{e.expense_date}</div>
                   {!props.readOnly && <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-                    <button onClick={function(){openEdit(e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️ Edit</button>
+                    {!props.readOnly && <button onClick={function(){openEdit(e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️ Edit</button>}
                     <button onClick={function(){deleteExpense(e);}} disabled={deleting===e.id} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
                   </div>}
                 </div>
@@ -1778,10 +1781,10 @@ function InfoTab(props) {
             return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
           })}
         </div>
-        <button onClick={function(){openAdd("aptinfo");setForm(Object.assign({},props.aptInfo));}}
+        {!props.readOnly && <button onClick={function(){openAdd("aptinfo");setForm(Object.assign({},props.aptInfo));}}
           style={{marginTop:12,background:"rgba(255,255,255,.15)",color:"#FFF",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
           ✏️ Edit Info
-        </button>
+        </button>}
       </div>
 
       <div className="income-tabs">
@@ -1798,7 +1801,7 @@ function InfoTab(props) {
           </div>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.maintenanceSlabs.length} slabs</div>
-            <button className="add-btn" onClick={function(){openAdd("slab");}}>＋ Add Slab</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("slab");}}>＋ Add Slab</button>}
           </div>
           <div className="card">
             {props.maintenanceSlabs.map(function(s,i){
@@ -1811,8 +1814,8 @@ function InfoTab(props) {
                         <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Active slab</div>
                       </div>
                       {!props.readOnly && <div style={{display:"flex",gap:6}}>
-                        <button onClick={function(){openEdit("slab",s);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
-                        <button onClick={function(){deleteItem("maintenance_slabs",s.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                        {!props.readOnly && <button onClick={function(){openEdit("slab",s);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--gold)"}}>✏️</button>}
+                        {!props.readOnly && <button onClick={function(){deleteItem("maintenance_slabs",s.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"var(--red)"}}>🗑</button>}
                       </div>}
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
@@ -1823,15 +1826,15 @@ function InfoTab(props) {
                         </div>;
                       })}
                     </div>
-                    <button onClick={function(){recalculateBills(s);}}
+                    {!props.readOnly && <button onClick={function(){recalculateBills(s);}}
                       disabled={recalcRunning}
                       style={{marginTop:10,width:"100%",border:"1.5px solid var(--gold)",background:"#FFF9E6",color:"var(--gold)",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
                       {recalcRunning?"⏳ Checking...":"🔄 Preview Bill Recalculation"}
-                    </button>
-                    {recalcResult && recalcResult.length===0 && (
+                    </button>}
+                    {!props.readOnly && recalcResult && recalcResult.length===0 && (
                       <div style={{marginTop:8,padding:"8px 10px",background:"#E8F5EE",borderRadius:8,fontSize:12,color:"var(--green)"}}>✅ All bills already correct for this slab</div>
                     )}
-                    {recalcResult && recalcResult.length>0 && (
+                    {!props.readOnly && recalcResult && recalcResult.length>0 && (
                       <div style={{marginTop:8}}>
                         <div style={{fontSize:12,fontWeight:600,marginBottom:6,color:"var(--red)"}}>{recalcResult.length} bills need updating:</div>
                         <div style={{maxHeight:160,overflowY:"auto",borderRadius:8,border:"1px solid var(--border)"}}>
@@ -1864,7 +1867,7 @@ function InfoTab(props) {
         <div style={G}>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.ebDetails.length} blocks</div>
-            <button className="add-btn" onClick={function(){openAdd("eb");}}>＋ Add Block</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("eb");}}>＋ Add Block</button>}
           </div>
           <div className="card">
             {props.ebDetails.map(function(e,i){
@@ -1877,8 +1880,8 @@ function InfoTab(props) {
                   <div style={{textAlign:"right"}}>
                     <div style={{fontWeight:700,fontSize:14,fontFamily:"monospace"}}>{e.service_no}</div>
                     <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-                      <button onClick={function(){openEdit("eb",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
-                      <button onClick={function(){deleteItem("eb_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                      {!props.readOnly && <button onClick={function(){openEdit("eb",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>}
+                      {!props.readOnly && <button onClick={function(){deleteItem("eb_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>}
                     </div>
                   </div>
                 </div>
@@ -1900,7 +1903,7 @@ function InfoTab(props) {
           </div>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.employeeDetails.length} employees</div>
-            <button className="add-btn" onClick={function(){openAdd("employee");}}>＋ Add Employee</button>
+            {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("employee");}}>＋ Add Employee</button>}
           </div>
           <div className="card">
             {props.employeeDetails.map(function(e,i){
@@ -1913,8 +1916,8 @@ function InfoTab(props) {
                   <div style={{textAlign:"right"}}>
                     <div style={{fontWeight:700,fontSize:14,color:"var(--red)"}}>{fmtRupee(e.salary)}/mo</div>
                     <div style={{display:"flex",gap:4,marginTop:4,justifyContent:"flex-end"}}>
-                      <button onClick={function(){openEdit("employee",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>
-                      <button onClick={function(){deleteItem("employee_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>
+                      {!props.readOnly && <button onClick={function(){openEdit("employee",e);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--gold)"}}>✏️</button>}
+                      {!props.readOnly && <button onClick={function(){deleteItem("employee_details",e.id);}} style={{border:"none",background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"var(--red)"}}>🗑</button>}
                     </div>
                   </div>
                 </div>
@@ -1948,8 +1951,8 @@ function InfoTab(props) {
               );
             })}
           </div>
-          <button onClick={function(){setFormType("bankinfo");setEditing(null);setForm(Object.assign({},props.aptInfo));setShowForm(true);}}
-            className="btn btn-secondary">✏️ Edit Bank Details</button>
+          {!props.readOnly && <button onClick={function(){setFormType("bankinfo");setEditing(null);setForm(Object.assign({},props.aptInfo));setShowForm(true);}}
+            className="btn btn-secondary">✏️ Edit Bank Details</button>}
         </div>
       )}
 
@@ -2414,12 +2417,15 @@ function ApprovalsTab(props) {
     setLoading(true);
     var rq = supabase.from("registration_requests").select("*").order("created_at",{ascending:false});
     var pq = supabase.from("payment_submissions").select("*").order("created_at",{ascending:false});
-    var uq = supabase.from("resident_users").select("*,admin_group(is_super_admin)").order("created_at",{ascending:false});
-    // If owner mode — filter to own flat only
+    // Users: in owner mode show only own flat's tenants; in admin mode show ALL
+    var uq = supabase.from("resident_users").select("*,admin_group(*)").order("flat_id").order("created_at",{ascending:false});
+    // Owner mode — filter registrations & payments to own flat, tenants only for users
     if (props.ownerFlatId) {
-      rq = rq.eq("flat_id", props.ownerFlatId);
+      rq = rq.eq("flat_id", props.ownerFlatId).eq("role","tenant");
+      // Tenants payment submissions from their flat
       pq = pq.eq("flat_id", props.ownerFlatId);
-      uq = uq.eq("flat_id", props.ownerFlatId);
+      // Only show tenants of their own flat in Users tab
+      uq = uq.eq("flat_id", props.ownerFlatId).eq("role","tenant");
     }
     var [r, p, u] = await Promise.all([rq, pq, uq]);
     if(r.data) setRequests(r.data);
