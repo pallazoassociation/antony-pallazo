@@ -712,7 +712,7 @@ export default function App() {
       </div>
 
       <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"approvals",icon:"✅",label:"Approvals",badge:true}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"}].map(function(t){
           return (
             <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:64,flexShrink:0}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
@@ -1796,9 +1796,9 @@ function InfoTab(props) {
       {/* ── Maintenance Slabs ── */}
       {sec==="slabs" && (
         <div style={G}>
-          <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:12,padding:"12px 14px",marginBottom:14,fontSize:12,color:"#7A5C00",lineHeight:1.7}}>
+          {!props.readOnly && <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:12,padding:"12px 14px",marginBottom:14,fontSize:12,color:"#7A5C00",lineHeight:1.7}}>
             <b>⚠️ Important:</b> When changing maintenance amount, set the <b>End Month</b> on the old slab, then add a new slab with the new amount and <b>Start Month</b>. Then use <b>Recalculate Bills</b> to update all affected bills — flats that paid advance will show the difference as overdue.
-          </div>
+          </div>}
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{props.maintenanceSlabs.length} slabs</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("slab");}}>＋ Add Slab</button>}
@@ -2045,9 +2045,18 @@ function ResidentPortal(props) {
   var [passSaving, setPassSaving] = useState(false);
   var [passErr, setPassErr] = useState("");
   var [pendingCount, setPendingCount] = useState(0);
+  var [resSlabs, setResSlabs] = useState([]);
+  var [resAptInfo, setResAptInfo] = useState({});
+  var [ownerExpenses, setOwnerExpenses] = useState([]);
+  var [ownerIncome, setOwnerIncome] = useState([]);
+  var [ownerCorpus, setOwnerCorpus] = useState([]);
+  var [ownerFD, setOwnerFD] = useState([]);
+  var [ownerPayments, setOwnerPayments] = useState([]);
+  var [ownerMonthlySummary, setOwnerMonthlySummary] = useState([]);
+  var [ownerOverdue, setOwnerOverdue] = useState([]);
   var flatId = props.profile.flat_id;
   var isOwner = props.profile.role === "owner";
-  var sp = props.sharedProps; // full admin data for owner view (null for tenant)
+  var sp = props.sharedProps;
 
   async function changePassword() {
     setPassErr("");
@@ -2071,14 +2080,35 @@ function ResidentPortal(props) {
 
   useEffect(function(){
     loadResidentData();
-    if (isOwner) {
-      // Load full admin data for owner's extended tabs
-      if (props.sharedProps && props.sharedProps.allExpenses && props.sharedProps.allExpenses.length === 0) {
-        // Data not loaded yet — trigger reload via the parent's loadData
-        // sharedProps is passed live from parent so it auto-updates
-      }
-      supabase.from("pending_approvals_summary").select("*").single()
-        .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
+    // Load slabs + apt info for ALL roles (tenant needs maintenance charges)
+    Promise.all([
+      supabase.from("maintenance_slabs").select("*").order("start_month"),
+      supabase.from("apartment_info").select("*"),
+    ]).then(function(results){
+      if(results[0].data) setResSlabs(results[0].data);
+      if(results[1].data){ var ai={}; results[1].data.forEach(function(r){ai[r.key]=r.value;}); setResAptInfo(ai); }
+    });
+    // Load full financial data for owners directly (no dependency on parent sharedProps)
+    if(isOwner){
+      Promise.all([
+        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+        supabase.from("other_income").select("*").order("received_date",{ascending:false}),
+        supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
+        supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
+        supabase.from("payments").select("*").order("payment_date",{ascending:false}).limit(500),
+        supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
+        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
+        supabase.from("pending_approvals_summary").select("*").single(),
+      ]).then(function(r){
+        if(r[0].data) setOwnerExpenses(r[0].data);
+        if(r[1].data) setOwnerIncome(r[1].data);
+        if(r[2].data) setOwnerCorpus(r[2].data);
+        if(r[3].data) setOwnerFD(r[3].data);
+        if(r[4].data) setOwnerPayments(r[4].data);
+        if(r[5].data) setOwnerMonthlySummary(r[5].data);
+        if(r[6].data) setOwnerOverdue(r[6].data);
+        if(r[7].data) setPendingCount((r[7].data.pending_registrations||0)+(r[7].data.pending_payments||0));
+      });
     }
   },[]);
 
@@ -2133,7 +2163,15 @@ function ResidentPortal(props) {
     await loadResidentData();
   }
 
-  var overdueBills = bills.filter(function(b){return b.status==="overdue";});
+  var today = new Date();
+    var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+    var overdueBills = bills.filter(function(b){
+      // Never show future months as overdue
+      if (b.billing_month > curMonth) return false;
+      // Current month only after 15th
+      if (b.billing_month === curMonth && today.getDate() <= 15) return false;
+      return b.status==="overdue" && (b.arrears||0) > 0;
+    });
   var paidBills    = bills.filter(function(b){return b.status==="paid";});
   var totalDue     = overdueBills.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
   var unreadNotif  = notifications.filter(function(n){return !n.is_read;}).length;
@@ -2231,41 +2269,101 @@ function ResidentPortal(props) {
 
           {/* NOTIFICATIONS TAB */}
           {tab==="notifications" && (<>
-            <div style={{padding:"14px 16px 8px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Notifications</div>
+            <div style={{padding:"14px 16px 8px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Notifications</div>
+              {notifications.some(function(n){return !n.is_read;}) && (
+                <button onClick={async function(){
+                  await supabase.from("notifications").update({is_read:true}).eq("user_id",props.profile.id);
+                  setNotifications(function(prev){return prev.map(function(n){return Object.assign({},n,{is_read:true});});});
+                }} style={{fontSize:11,color:"var(--gold)",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>
+                  Mark all read
+                </button>
+              )}
+            </div>
             <div style={{padding:"0 16px 24px"}}>
               <div className="card">
                 {notifications.map(function(n,i){
-                  return <div key={n.id||i} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)",background:n.is_read?"":"#FFFBF0"}}>
-                    <div style={{fontSize:13,fontWeight:600}}>{n.title}</div>
-                    <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>{n.body}</div>
-                    <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>{n.created_at?.slice(0,16).replace("T"," ")}</div>
-                  </div>;
+                  return (
+                    <div key={n.id||i} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)",background:n.is_read?"":"#FFFBF0"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13,fontWeight:600,color:n.is_read?"var(--text)":"var(--gold)"}}>{n.title}</div>
+                          <div style={{fontSize:12,color:"var(--muted)",marginTop:4,lineHeight:1.5}}>{n.body}</div>
+                          <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>{n.created_at?.slice(0,16).replace("T"," ")}</div>
+                        </div>
+                        <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
+                          {!n.is_read && (
+                            <button onClick={async function(){
+                              await supabase.from("notifications").update({is_read:true}).eq("id",n.id);
+                              setNotifications(function(prev){return prev.map(function(x){return x.id===n.id?Object.assign({},x,{is_read:true}):x;});});
+                            }} style={{fontSize:10,padding:"2px 8px",border:"1.5px solid var(--gold)",borderRadius:6,background:"transparent",color:"var(--gold)",cursor:"pointer",fontWeight:600,whiteSpace:"nowrap"}}>
+                              ✓ Read
+                            </button>
+                          )}
+                          <button onClick={async function(){
+                            await supabase.from("notifications").delete().eq("id",n.id);
+                            setNotifications(function(prev){return prev.filter(function(x){return x.id!==n.id;});});
+                          }} style={{fontSize:10,padding:"2px 8px",border:"none",borderRadius:6,background:"var(--bg)",color:"var(--red)",cursor:"pointer",fontWeight:600}}>
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
                 })}
                 {notifications.length===0&&<div className="empty"><div className="empty-icon">🔔</div><div>No notifications</div></div>}
               </div>
             </div>
           </>)}
 
-          {/* OWNER EXTENDED TABS — read-only views of admin data */}
-          {tab==="income"   && isOwner && sp && <IncomeTab   {...sp} reload={function(){}} readOnly/>}
-          {tab==="expenses" && isOwner && sp && <ExpensesTab {...sp} reload={function(){}} readOnly/>}
-          {tab==="reports"  && isOwner && sp && <ReportsTab  {...sp}/>}
-          {tab==="approvals"&& isOwner && (
-            <ApprovalsTab {...(sp||{})}
-              showToast={showToast}
-              userProfile={props.profile}
+          {/* OWNER EXTENDED TABS — uses directly loaded owner data */}
+          {tab==="income" && isOwner && (
+            <IncomeTab
+              otherIncome={ownerIncome} corpusData={ownerCorpus} fdData={ownerFD}
+              allPayments={ownerPayments} monthlySummaries={ownerMonthlySummary}
+              totalMaint={0} totalOtherInc={ownerIncome.filter(function(o){return o.source!=="Opening Bank Balance";}).reduce(function(s,o){return s+o.amount;},0)}
+              totalCorpus={ownerCorpus.reduce(function(s,c){return s+c.amount;},0)}
+              fdMatured={ownerFD.filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0)}
+              selMonth={getCurrentMonth()} setSelMonth={function(){}}
+              showToast={showToast} reload={function(){}} readOnly
+            />
+          )}
+          {tab==="expenses" && isOwner && (
+            <ExpensesTab
+              allExpenses={ownerExpenses}
+              monthExp={ownerExpenses.filter(function(e){return e.billing_month===getCurrentMonth();})}
+              selMonth={getCurrentMonth()} setSelMonth={function(){}}
+              showToast={showToast} reload={function(){}} readOnly
+            />
+          )}
+          {tab==="reports" && isOwner && (
+            <ReportsTab
+              allExpenses={ownerExpenses} otherIncome={ownerIncome}
+              corpusData={ownerCorpus} fdData={ownerFD} allPayments={ownerPayments}
+              monthlySummaries={ownerMonthlySummary} overdueBills={ownerOverdue}
+              flats={(sp||{}).flats||[]} maintenanceSlabs={resSlabs}
+              ebDetails={[]} employeeDetails={[]} aptInfo={resAptInfo}
+              acctSettings={(sp||{}).acctSettings||{}} selMonth={getCurrentMonth()}
+            />
+          )}
+          {tab==="approvals" && isOwner && (
+            <ApprovalsTab
+              showToast={showToast} userProfile={props.profile}
+              aptInfo={resAptInfo}
               reload={function(){
                 supabase.from("pending_approvals_summary").select("*").single()
                   .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
               }}
               ownerFlatId={flatId}
-              aptInfo={sp?sp.aptInfo:{}}
             />
           )}
           {tab==="info" && (
-            isOwner && sp
-              ? <InfoTab {...sp} reload={function(){}} readOnly/>
-              : <TenantInfoTab aptInfo={sp?sp.aptInfo:{}} maintenanceSlabs={sp?sp.maintenanceSlabs:[]}/>
+            isOwner
+              ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={[]}
+                  employeeDetails={[]} aptInfo={resAptInfo}
+                  showToast={showToast} reload={function(){}} readOnly/>
+              : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
+          )}
           )}
         </div>
 
@@ -2417,20 +2515,29 @@ function ApprovalsTab(props) {
     setLoading(true);
     var rq = supabase.from("registration_requests").select("*").order("created_at",{ascending:false});
     var pq = supabase.from("payment_submissions").select("*").order("created_at",{ascending:false});
-    // Users: in owner mode show only own flat's tenants; in admin mode show ALL
-    var uq = supabase.from("resident_users").select("*,admin_group(*)").order("flat_id").order("created_at",{ascending:false});
-    // Owner mode — filter registrations & payments to own flat, tenants only for users
+    // Simple select without join - avoids empty results from failed joins
+    var uq = supabase.from("resident_users").select("*").order("flat_id").order("role");
+    // Owner mode — filter to own flat tenants only
     if (props.ownerFlatId) {
       rq = rq.eq("flat_id", props.ownerFlatId).eq("role","tenant");
-      // Tenants payment submissions from their flat
       pq = pq.eq("flat_id", props.ownerFlatId);
-      // Only show tenants of their own flat in Users tab
       uq = uq.eq("flat_id", props.ownerFlatId).eq("role","tenant");
     }
-    var [r, p, u] = await Promise.all([rq, pq, uq]);
+    var [r, p, u, ag] = await Promise.all([
+      rq, pq, uq,
+      // Load admin group separately
+      supabase.from("admin_group").select("resident_user_id,is_super_admin")
+    ]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayments(p.data);
-    if(u.data) setResidents(u.data);
+    if(u.data){
+      // Merge admin_group data into users
+      var adminIds = new Set((ag.data||[]).map(function(a){return a.resident_user_id;}));
+      var usersWithAdmin = u.data.map(function(usr){
+        return Object.assign({},usr,{is_admin: adminIds.has(usr.id)});
+      });
+      setResidents(usersWithAdmin);
+    }
     setLoading(false);
   }
 
@@ -2547,7 +2654,7 @@ function ApprovalsTab(props) {
   }
 
   function isUserAdmin(user) {
-    return user.admin_group && Array.isArray(user.admin_group) && user.admin_group.length > 0;
+    return user.is_admin === true;
   }
 
   async function deleteResident(user){
