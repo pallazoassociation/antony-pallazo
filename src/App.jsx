@@ -2047,6 +2047,7 @@ function ResidentPortal(props) {
   var [pendingCount, setPendingCount] = useState(0);
   var [resSlabs, setResSlabs] = useState([]);
   var [resAptInfo, setResAptInfo] = useState({});
+  var [resInfoLoaded, setResInfoLoaded] = useState(false);
   var [ownerExpenses, setOwnerExpenses] = useState([]);
   var [ownerIncome, setOwnerIncome] = useState([]);
   var [ownerCorpus, setOwnerCorpus] = useState([]);
@@ -2087,6 +2088,7 @@ function ResidentPortal(props) {
     ]).then(function(results){
       if(results[0].data) setResSlabs(results[0].data);
       if(results[1].data){ var ai={}; results[1].data.forEach(function(r){ai[r.key]=r.value;}); setResAptInfo(ai); }
+      setResInfoLoaded(true);
     });
     // Load full financial data for owners directly (no dependency on parent sharedProps)
     if(isOwner){
@@ -2358,12 +2360,16 @@ function ResidentPortal(props) {
             />
           )}
           {tab==="info" && (
-            isOwner
-              ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={[]}
-                  employeeDetails={[]} aptInfo={resAptInfo}
-                  showToast={showToast} reload={function(){}} readOnly/>
-              : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
-          )}
+            !resInfoLoaded
+              ? <div style={{padding:"40px 20px",textAlign:"center",color:"var(--muted)"}}>
+                  <div style={{fontSize:24,marginBottom:8}}>⏳</div>
+                  <div style={{fontSize:13}}>Loading info…</div>
+                </div>
+              : isOwner
+                ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={[]}
+                    employeeDetails={[]} aptInfo={resAptInfo}
+                    showToast={showToast} reload={function(){}} readOnly/>
+                : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
           )}
         </div>
 
