@@ -216,7 +216,7 @@ function LoginScreen(props) {
           {(loginRole==="owner"||loginRole==="tenant")&&flatId&&resUsers===null&&(
             <button className="btn btn-secondary mt10" onClick={function(){setScreen("register");setRegData(function(p){return Object.assign({},p,{flatId:flatId,role:loginRole});});setErr("");}}>📝 Register New Account</button>
           )}
-          {loginRole==="admin"&&(<div style={{marginTop:16,padding:"10px 12px",background:"var(--bg)",borderRadius:10,fontSize:12,color:"var(--muted)"}}>First-time admin login: <b>admin</b> / <b>Admin@2024</b> — change password after logging in</div>)}
+          
         </>)}
       </div>
       <div style={{color:"rgba(255,255,255,.2)",fontSize:11,marginTop:18,textAlign:"center"}}>Antony Pallazo · Committee Management</div>
@@ -385,6 +385,8 @@ export default function App() {
         supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
         supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
         supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+        supabase.from("eb_details").select("*").order("block_name"),
+        supabase.from("employee_details").select("*").order("name"),
         supabase.from("notices").select("*").order("posted_at",{ascending:false}),
         supabase.from("other_income").select("*").order("received_date",{ascending:false}),
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
@@ -505,6 +507,12 @@ export default function App() {
       var amt = parseInt(payForm.amount, 10);
       if (!amt || amt <= 0) { showToast("⚠️ Enter a valid amount"); return; }
       if (!payDate) { showToast("⚠️ Enter the payment received date"); return; }
+      // Duplicate check
+      var dupChk = await supabase.from("payments").select("id").eq("flat_id",flat.id).eq("billing_month",selMonth).single();
+      if (!dupChk.error && dupChk.data) {
+        showToast("⚠️ Payment already exists for "+monthLabel(selMonth));
+        return;
+      }
       var r = await supabase.from("payments").insert({
         flat_id:flat.id, billing_month:selMonth, amount_paid:amt,
         mode:payForm.mode, reference:payForm.ref||null, payment_date:payDate
@@ -604,7 +612,11 @@ export default function App() {
 
   // ── Month bills: 30 rows from flat_month_status view ─────────
   var monthBills = monthBillsData; // already filtered by selMonth in DB query
-  var monthExp   = allExpenses.filter(function(e){ return e.billing_month === selMonth; });
+  var monthExp   = allExpenses.filter(function(e){
+    // Check billing_month first, fall back to expense_date month
+    var bm = e.billing_month || (e.expense_date ? e.expense_date.slice(0,7) : null);
+    return bm === selMonth;
+  });
   var monthlyExp = monthExp.reduce(function(s,e){return s+e.amount;},0);
   var totalExp   = allExpenses.reduce(function(s,e){return s+e.amount;},0);
 
@@ -2035,7 +2047,7 @@ function ResidentPortal(props) {
   var [submissions, setSubmissions] = useState([]);
   var [loading, setLoading] = useState(true);
   var [showPayForm, setShowPayForm] = useState(false);
-  var [payForm, setPayForm] = useState({billing_month:"",amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0]});
+  var [payForm, setPayForm] = useState({billing_month:getCurrentMonth(),amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0],payType:"single",months:[]});
   var [saving, setSaving] = useState(false);
   var [toast, setToast] = useState(null);
   var [notifications, setNotifications] = useState([]);
@@ -2049,6 +2061,9 @@ function ResidentPortal(props) {
   var [resAptInfo, setResAptInfo] = useState({});
   var [resInfoLoaded, setResInfoLoaded] = useState(false);
   var [ownerExpenses, setOwnerExpenses] = useState([]);
+  var [ownerEB, setOwnerEB] = useState([]);
+  var [ownerStaff, setOwnerStaff] = useState([]);
+  var [ownerSelMonth, setOwnerSelMonth] = useState(getCurrentMonth());
   var [ownerIncome, setOwnerIncome] = useState([]);
   var [ownerCorpus, setOwnerCorpus] = useState([]);
   var [ownerFD, setOwnerFD] = useState([]);
@@ -2094,6 +2109,8 @@ function ResidentPortal(props) {
     if(isOwner){
       Promise.all([
         supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+        supabase.from("eb_details").select("*").order("block_name"),
+        supabase.from("employee_details").select("*").order("name"),
         supabase.from("other_income").select("*").order("received_date",{ascending:false}),
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
         supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
@@ -2103,13 +2120,15 @@ function ResidentPortal(props) {
         supabase.from("pending_approvals_summary").select("*").single(),
       ]).then(function(r){
         if(r[0].data) setOwnerExpenses(r[0].data);
-        if(r[1].data) setOwnerIncome(r[1].data);
-        if(r[2].data) setOwnerCorpus(r[2].data);
-        if(r[3].data) setOwnerFD(r[3].data);
-        if(r[4].data) setOwnerPayments(r[4].data);
-        if(r[5].data) setOwnerMonthlySummary(r[5].data);
-        if(r[6].data) setOwnerOverdue(r[6].data);
-        if(r[7].data) setPendingCount((r[7].data.pending_registrations||0)+(r[7].data.pending_payments||0));
+        if(r[1].data) setOwnerEB(r[1].data);
+        if(r[2].data) setOwnerStaff(r[2].data);
+        if(r[3].data) setOwnerIncome(r[3].data);
+        if(r[4].data) setOwnerCorpus(r[4].data);
+        if(r[5].data) setOwnerFD(r[5].data);
+        if(r[6].data) setOwnerPayments(r[6].data);
+        if(r[7].data) setOwnerMonthlySummary(r[7].data);
+        if(r[8].data) setOwnerOverdue(r[8].data);
+        if(r[9].data) setPendingCount((r[9].data.pending_registrations||0)+(r[9].data.pending_payments||0));
       });
     }
   },[]);
@@ -2130,52 +2149,70 @@ function ResidentPortal(props) {
   }
 
   async function submitPayment(){
-    if(!payForm.billing_month||!payForm.amount||!payForm.mode||!payForm.transaction_date){ showToast("⚠️ Fill all required fields including payment date"); return; }
+    if(!payForm.transaction_date){ showToast("⚠️ Enter payment date"); return; }
     setSaving(true);
     var screenshotUrl = null;
-    // Upload screenshot if provided
     if(file){
-      var fname = flatId+"-"+payForm.billing_month+"-"+Date.now()+"."+file.name.split(".").pop();
+      var fname = flatId+"-"+Date.now()+"."+file.name.split(".").pop();
       var up = await supabase.storage.from("payment-screenshots").upload(fname, file);
-      if(!up.error){
-        var pub = supabase.storage.from("payment-screenshots").getPublicUrl(fname);
-        screenshotUrl = pub.data.publicUrl;
-      }
+      if(!up.error){ var pub = supabase.storage.from("payment-screenshots").getPublicUrl(fname); screenshotUrl = pub.data.publicUrl; }
     }
-    var res = await supabase.from("payment_submissions").insert({
-      flat_id:flatId, billing_month:payForm.billing_month,
-      amount:parseInt(payForm.amount), mode:payForm.mode,
-      reference_no:payForm.reference||null, notes:payForm.notes||null,
-      screenshot_url:screenshotUrl, submitted_by:props.profile.id, status:"pending",
-      transaction_date:payForm.transaction_date||null
-    });
-    if(res.error){ showToast("❌ "+res.error.message); setSaving(false); return; }
-    // Notify all admins
-    await supabase.from("notifications").insert({
-      user_id:null, type:"payment_submission",
-      title:"Payment Submitted",
-      body:"Flat "+flatId+" submitted ₹"+payForm.amount+" for "+monthLabel(payForm.billing_month),
-      data:{flat_id:flatId, billing_month:payForm.billing_month, amount:payForm.amount}
-    });
+
+    if(payForm.payType==="advance"){
+      var months = payForm.months||[];
+      if(months.length===0){ showToast("⚠️ Select at least one month"); setSaving(false); return; }
+      if(!payForm.amount||parseInt(payForm.amount)<=0){ showToast("⚠️ Enter amount per month"); setSaving(false); return; }
+      // Submit one payment submission per month
+      var inserts = months.map(function(bm){
+        return {flat_id:flatId,billing_month:bm,amount:parseInt(payForm.amount),mode:payForm.mode,
+          reference_no:payForm.reference||null,notes:payForm.notes||null,
+          screenshot_url:screenshotUrl,submitted_by:props.profile.id,status:"pending",
+          transaction_date:payForm.transaction_date||null};
+      });
+      var res = await supabase.from("payment_submissions").insert(inserts);
+      if(res.error){ showToast("❌ "+res.error.message); setSaving(false); return; }
+      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",
+        title:"Advance Payment Submitted",
+        body:"Flat "+flatId+" submitted advance payment for "+months.length+" months: "+months.map(monthLabel).join(", "),
+        data:{flat_id:flatId}});
+      showToast("✅ Advance payment submitted for "+months.length+" month(s)!");
+    } else {
+      // Single month
+      if(!payForm.billing_month||!payForm.amount||!payForm.mode){ showToast("⚠️ Fill all required fields"); setSaving(false); return; }
+      var res2 = await supabase.from("payment_submissions").insert({
+        flat_id:flatId,billing_month:payForm.billing_month,
+        amount:parseInt(payForm.amount),mode:payForm.mode,
+        reference_no:payForm.reference||null,notes:payForm.notes||null,
+        screenshot_url:screenshotUrl,submitted_by:props.profile.id,status:"pending",
+        transaction_date:payForm.transaction_date||null
+      });
+      if(res2.error){ showToast("❌ "+res2.error.message); setSaving(false); return; }
+      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",
+        title:"Payment Submitted",
+        body:"Flat "+flatId+" submitted ₹"+payForm.amount+" for "+monthLabel(payForm.billing_month),
+        data:{flat_id:flatId,billing_month:payForm.billing_month,amount:payForm.amount}});
+      showToast("✅ Payment submitted! Awaiting admin approval.");
+    }
     setSaving(false);
     setShowPayForm(false);
-    setPayForm({billing_month:"",amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0]});
+    setPayForm({billing_month:getCurrentMonth(),amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0],payType:"single",months:[]});
     setFile(null);
-    showToast("✅ Payment submitted! Awaiting admin approval.");
     await loadResidentData();
   }
 
   var today = new Date();
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
     var overdueBills = bills.filter(function(b){
-      // Never show future months as overdue
       if (b.billing_month > curMonth) return false;
-      // Current month only after 15th
       if (b.billing_month === curMonth && today.getDate() <= 15) return false;
       return b.status==="overdue" && (b.arrears||0) > 0;
     });
+    // pendingDue: current month counts as due even before 15th (shows ₹1800, not ₹0)
+    var pendingDue = bills.filter(function(b){
+      return b.status==="overdue" && b.billing_month <= curMonth;
+    });
   var paidBills    = bills.filter(function(b){return b.status==="paid";});
-  var totalDue     = overdueBills.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
+  var totalDue     = pendingDue.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
   var unreadNotif  = notifications.filter(function(n){return !n.is_read;}).length;
 
   if(loading) return <LoadingScreen msg="Loading your flat details…" dots/>;
@@ -2227,7 +2264,7 @@ function ResidentPortal(props) {
 
             <div style={{margin:"14px 16px 0"}}>
               <button className="btn btn-primary" onClick={function(){
-                setPayForm(function(p){return Object.assign({},p,{billing_month:bills.find(function(b){return b.status==="overdue";})?bills.find(function(b){return b.status==="overdue";}).billing_month:getCurrentMonth()});});
+                setPayForm(function(p){return Object.assign({},p,{billing_month:getCurrentMonth()});});
                 setShowPayForm(true);
               }}>💸 Submit Payment</button>
             </div>
@@ -2333,8 +2370,8 @@ function ResidentPortal(props) {
           {tab==="expenses" && isOwner && (
             <ExpensesTab
               allExpenses={ownerExpenses}
-              monthExp={ownerExpenses.filter(function(e){return e.billing_month===getCurrentMonth();})}
-              selMonth={getCurrentMonth()} setSelMonth={function(){}}
+              monthExp={ownerExpenses.filter(function(e){var bm=e.billing_month||(e.expense_date?e.expense_date.slice(0,7):null);return bm===ownerSelMonth;})}
+              selMonth={ownerSelMonth} setSelMonth={setOwnerSelMonth}
               showToast={showToast} reload={function(){}} readOnly
             />
           )}
@@ -2344,7 +2381,7 @@ function ResidentPortal(props) {
               corpusData={ownerCorpus} fdData={ownerFD} allPayments={ownerPayments}
               monthlySummaries={ownerMonthlySummary} overdueBills={ownerOverdue}
               flats={(sp||{}).flats||[]} maintenanceSlabs={resSlabs}
-              ebDetails={[]} employeeDetails={[]} aptInfo={resAptInfo}
+              ebDetails={ownerEB} employeeDetails={ownerStaff} aptInfo={resAptInfo}
               acctSettings={(sp||{}).acctSettings||{}} selMonth={getCurrentMonth()}
             />
           )}
@@ -2366,8 +2403,8 @@ function ResidentPortal(props) {
                   <div style={{fontSize:13}}>Loading info…</div>
                 </div>
               : isOwner
-                ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={[]}
-                    employeeDetails={[]} aptInfo={resAptInfo}
+                ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={ownerEB}
+                    employeeDetails={ownerStaff} aptInfo={resAptInfo}
                     showToast={showToast} reload={function(){}} readOnly/>
                 : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
           )}
@@ -2400,20 +2437,84 @@ function ResidentPortal(props) {
                 <button className="close-btn" onClick={function(){setShowPayForm(false);}}>✕</button>
               </div>
               <div className="sheet-body">
-                <div className="form-group"><label className="form-label">Month *</label>
-                  <select className="form-input" value={payForm.billing_month} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{billing_month:e.target.value});});}}>
-                    <option value="">Select Month</option>
-                    {ALL_MONTHS.slice().reverse().map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
-                  </select>
+
+                {/* Payment type toggle */}
+                <div style={{display:"flex",gap:0,marginBottom:14,borderRadius:10,overflow:"hidden",border:"1.5px solid var(--border)"}}>
+                  {[["single","📅 Current/Past"],["advance","⏩ Advance"]].map(function(x){
+                    return <button key={x[0]} onClick={function(){setPayForm(function(p){return Object.assign({},p,{payType:x[0],months:[],billing_month:getCurrentMonth()});});}}
+                      style={{flex:1,padding:"9px 6px",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",
+                        background:payForm.payType===x[0]?"var(--gold)":"var(--card)",color:payForm.payType===x[0]?"#FFF":"var(--muted)"}}>
+                      {x[1]}
+                    </button>;
+                  })}
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                  <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
-                  <div className="form-group"><label className="form-label">Mode *</label>
-                    <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
-                      {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+
+                {/* Single month payment */}
+                {(payForm.payType==="single"||!payForm.payType) && <>
+                  <div className="form-group"><label className="form-label">Month *</label>
+                    <select className="form-input" value={payForm.billing_month} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{billing_month:e.target.value});});}}>
+                      <option value="">Select Month</option>
+                      {ALL_MONTHS.slice().reverse().map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
                     </select>
                   </div>
-                </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+                    <div className="form-group"><label className="form-label">Mode *</label>
+                      <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
+                        {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                      </select>
+                    </div>
+                  </div>
+                </>}
+
+                {/* Advance payment — multiple future months */}
+                {payForm.payType==="advance" && <>
+                  <div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:12,color:"var(--green)",fontWeight:500}}>
+                    ✅ Select months to pay in advance. Admin will verify and update each month.
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Select Months (current + next 18)</label>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:6}}>
+                      {(function(){
+                        var shown=[]; var now=new Date();
+                        var y=now.getFullYear(),m=now.getMonth()+1;
+                        for(var i=0;i<19;i++){
+                          shown.push(y+"-"+String(m).padStart(2,"0"));
+                          m++; if(m>12){m=1;y++;}
+                        }
+                        return shown;
+                      })().map(function(bm){
+                        var isSel=(payForm.months||[]).indexOf(bm)!==-1;
+                        return <button key={bm} onClick={function(){
+                          setPayForm(function(p){
+                            var nm=isSel?(p.months||[]).filter(function(x){return x!==bm;}):(p.months||[]).concat([bm]);
+                            return Object.assign({},p,{months:nm,amount:String(nm.length>0?nm.length+"x month":"")});
+                          });
+                        }} style={{padding:"6px 12px",borderRadius:99,border:"1.5px solid",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",
+                          borderColor:isSel?"var(--green)":"var(--border)",background:isSel?"#E8F5EE":"var(--card)",color:isSel?"var(--green)":"var(--muted)"}}>
+                          {isSel?"✓ ":""}{monthLabel(bm)}
+                        </button>;
+                      })}
+                    </div>
+                  </div>
+                  {(payForm.months||[]).length>0&&<div style={{background:"var(--bg)",borderRadius:10,padding:"10px 14px",marginBottom:10,fontSize:13}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                      <span style={{color:"var(--muted)"}}>{payForm.months.length} month(s)</span>
+                      <span style={{fontWeight:700,color:"var(--green)"}}>{payForm.months.length} payment(s) pending approval</span>
+                    </div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{(payForm.months||[]).slice().sort().map(monthLabel).join(", ")}</div>
+                  </div>}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <div className="form-group"><label className="form-label">Amount per Month (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+                    <div className="form-group"><label className="form-label">Mode *</label>
+                      <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
+                        {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                      </select>
+                    </div>
+                  </div>
+                </>}
+
+                {/* Common fields */}
                 <div className="form-group">
                   <label className="form-label">Payment / Transaction Date *</label>
                   <input className="form-input" type="date" value={payForm.transaction_date}
@@ -2625,18 +2726,23 @@ function ApprovalsTab(props) {
     await loadApprovals();
   }
 
-  async function approvePayment(sub){
-    // Record actual payment
+    async function approvePayment(sub){
+    if(sub.status==="approved"){ props.showToast("ℹ️ Already approved"); return; }
+    // Prevent duplicate payment record
+    var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month).single();
+    if(!dup.error && dup.data){
+      await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
+      props.showToast("✅ Marked approved (payment already recorded)");
+      await loadApprovals();
+      return;
+    }
     await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]});
-    // Update bill
     await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
-    // Update submission
     await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
-    // Notify resident
     await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_approved",title:"Payment Approved ✅",body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",data:{flat_id:sub.flat_id,billing_month:sub.billing_month}});
     props.showToast("✅ Payment approved for Flat "+sub.flat_id);
     await loadApprovals();
-    await props.reload();
+    // Note: NOT calling props.reload() — it resets sec to "registrations"
   }
 
   async function rejectPayment(sub, reason){
@@ -2678,7 +2784,10 @@ function ApprovalsTab(props) {
   return (
     <>
       <div className="income-tabs">
-        {[["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["payments","💳 Payments"+(pendingPays.length>0?" ("+pendingPays.length+")":"")],["users","👥 Users"]].map(function(x){
+        {(props.ownerFlatId
+          ? [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["users","👥 Users"]]
+          : [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["payments","💳 Payments"+(pendingPays.length>0?" ("+pendingPays.length+")":"")],["users","👥 Users"]]
+        ).map(function(x){
           return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
         })}
       </div>
@@ -2719,6 +2828,29 @@ function ApprovalsTab(props) {
       {/* ── Payment Submissions ── */}
       {sec==="payments" && (
         <div style={{padding:"10px 16px 24px"}}>
+          {/* Duplicate payment cleanup tool */}
+          <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#7A5C00",marginBottom:6}}>🔧 Fix Duplicate Payments</div>
+            <div style={{fontSize:11,color:"#7A5C00",marginBottom:8}}>If a flat has multiple payment records for the same month, remove duplicates keeping only the first entry.</div>
+            <button onClick={async function(){
+              var {data:allPays} = await supabase.from("payments").select("*").order("payment_date",{ascending:true});
+              if(!allPays){props.showToast("❌ Could not load payments"); return;}
+              var seen = {};
+              var toDelete = [];
+              allPays.forEach(function(p){
+                var key = p.flat_id+"-"+p.billing_month;
+                if(seen[key]){ toDelete.push(p.id); }
+                else seen[key]=true;
+              });
+              if(toDelete.length===0){props.showToast("✅ No duplicates found!"); return;}
+              if(!window.confirm("Found "+toDelete.length+" duplicate payment(s). Delete them?")) return;
+              await supabase.from("payments").delete().in("id",toDelete);
+              props.showToast("✅ Removed "+toDelete.length+" duplicate payment(s)");
+              await loadApprovals();
+            }} style={{background:"#D4A853",color:"#FFF",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+              🔍 Scan & Fix Duplicates
+            </button>
+          </div>
           {payments.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No payment submissions</div></div>}
           {payments.map(function(p){
             return (
