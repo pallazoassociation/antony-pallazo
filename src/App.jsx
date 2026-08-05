@@ -381,33 +381,31 @@ export default function App() {
     setDataLoading(true);
     try {
       var results = await Promise.all([
-        supabase.from("flats").select("*").order("block").order("flat_no"),
-        supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
-        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
-        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
-        supabase.from("eb_details").select("*").order("block_name"),
-        supabase.from("employee_details").select("*").order("name"),
-        supabase.from("notices").select("*").order("posted_at",{ascending:false}),
-        supabase.from("other_income").select("*").order("received_date",{ascending:false}),
-        supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
-        supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
-        supabase.from("account_settings").select("*"),
-        supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500),
+        supabase.from("flats").select("*").order("block").order("flat_no"),                              // 0
+        supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),           // 1
+        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),            // 2
+        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),        // 3
+        supabase.from("notices").select("*").order("posted_at",{ascending:false}),                      // 4
+        supabase.from("other_income").select("*").order("received_date",{ascending:false}),             // 5
+        supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),              // 6
+        supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),           // 7
+        supabase.from("account_settings").select("*"),                                                   // 8
+        supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500), // 9
       ]);
-      if (results[0].data) setFlats(results[0].data);
-      if (results[1].data) setMonthlySummaries(results[1].data);
-      if (results[2].data) setOverdueBills(results[2].data);
-      if (results[3].data) setAllExpenses(results[3].data);
-      if (results[4].data) setNotices(results[4].data);
-      if (results[5].data) setOtherIncome(results[5].data);
-      if (results[6].data) setCorpusData(results[6].data);
-      if (results[7].data) setFdData(results[7].data);
-      if (results[8].data) {
+      if (results[0].data)  setFlats(results[0].data);
+      if (results[1].data)  setMonthlySummaries(results[1].data);
+      if (results[2].data)  setOverdueBills(results[2].data);
+      if (results[3].data)  setAllExpenses(results[3].data);
+      if (results[4].data)  setNotices(results[4].data);
+      if (results[5].data)  setOtherIncome(results[5].data);
+      if (results[6].data)  setCorpusData(results[6].data);
+      if (results[7].data)  setFdData(results[7].data);
+      if (results[8].data)  {
         var settings = {};
         results[8].data.forEach(function(row){ settings[row.key]=row.value; });
         setAcctSettings(settings);
       }
-      if (results[9].data) setAllPayments(results[9].data);
+      if (results[9].data)  setAllPayments(results[9].data);
 
       // Pending approvals count
       var pc = await supabase.from("pending_approvals_summary").select("*").single();
