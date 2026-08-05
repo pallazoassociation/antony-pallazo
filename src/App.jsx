@@ -2397,16 +2397,19 @@ function ResidentPortal(props) {
             />
           )}
           {tab==="info" && (
-            !resInfoLoaded
-              ? <div style={{padding:"40px 20px",textAlign:"center",color:"var(--muted)"}}>
-                  <div style={{fontSize:24,marginBottom:8}}>⏳</div>
-                  <div style={{fontSize:13}}>Loading info…</div>
-                </div>
-              : isOwner
-                ? <InfoTab maintenanceSlabs={resSlabs} ebDetails={ownerEB}
-                    employeeDetails={ownerStaff} aptInfo={resAptInfo}
-                    showToast={showToast} reload={function(){}} readOnly/>
-                : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
+            isOwner
+              ? <InfoTab
+                  maintenanceSlabs={resSlabs.length>0 ? resSlabs : (props.sharedProps ? props.sharedProps.maintenanceSlabs||[] : [])}
+                  ebDetails={ownerEB.length>0 ? ownerEB : []}
+                  employeeDetails={ownerStaff.length>0 ? ownerStaff : []}
+                  aptInfo={Object.keys(resAptInfo).length>0 ? resAptInfo : (props.sharedProps ? props.sharedProps.aptInfo||{} : {})}
+                  showToast={showToast} reload={function(){}} readOnly/>
+              : resInfoLoaded
+                ? <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
+                : <div style={{padding:"40px 20px",textAlign:"center",color:"var(--muted)"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>⏳</div>
+                    <div style={{fontSize:13}}>Loading info…</div>
+                  </div>
           )}
         </div>
 
@@ -2572,7 +2575,7 @@ function ResidentPortal(props) {
 
 // ── ApprovalsTab ───────────────────────────────────────────────
 function ApprovalsTab(props) {
-  var [sec, setSec]         = useState("registrations");
+  var [sec, setSec] = useState("registrations");
   var [requests, setRequests] = useState([]);
   var [payments, setPayments] = useState([]);
   var [residents, setResidents] = useState([]);
@@ -2584,11 +2587,20 @@ function ApprovalsTab(props) {
   var [savingUser, setSavingUser] = useState(false);
   var emptyUserForm = {name:"",flat_id:"",role:"owner",phone:"",password:"",status:"active"};
   var [userForm, setUserForm] = useState(emptyUserForm);
+  // Keep sec in ref so remounts don't reset it
+  var secRef = React.useRef("registrations");
+  function setSecSafe(s){ secRef.current=s; setSec(s); }
+
+  useEffect(function(){ 
+    setSec(secRef.current); // restore on remount
+    loadApprovals(); 
+  },[]);
 
   useEffect(function(){
     if (editUser) setUserForm({name:editUser.name,flat_id:editUser.flat_id,role:editUser.role,phone:editUser.phone,password:"",status:editUser.status});
     else if (showAddUser) setUserForm(emptyUserForm);
   }, [editUser, showAddUser]);
+
 
   async function saveUserForm() {
     if (!userForm.name || !userForm.flat_id || !userForm.phone) { props.showToast("⚠️ Fill all required fields"); return; }
@@ -2788,7 +2800,7 @@ function ApprovalsTab(props) {
           ? [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["users","👥 Users"]]
           : [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["payments","💳 Payments"+(pendingPays.length>0?" ("+pendingPays.length+")":"")],["users","👥 Users"]]
         ).map(function(x){
-          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
+          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSecSafe(x[0]);}}>{x[1]}</button>;
         })}
       </div>
 
@@ -2852,6 +2864,7 @@ function ApprovalsTab(props) {
             </button>
           </div>
           {payments.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No payment submissions</div></div>}
+          {pendingPays.length===0&&payments.length>0&&<div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--green)"}}>✅ All payments have been processed</div>}
           {payments.map(function(p){
             return (
               <div key={p.id} className="card" style={{marginBottom:12}}>
