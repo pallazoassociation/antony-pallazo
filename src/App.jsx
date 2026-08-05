@@ -2387,8 +2387,11 @@ function ResidentPortal(props) {
           )}
           {tab==="approvals" && isOwner && (
             <ApprovalsTab
-              showToast={showToast} userProfile={props.profile}
+              key={"owner-approvals-"+flatId}
+              showToast={showToast}
+              userProfile={props.profile}
               aptInfo={resAptInfo}
+              flats={[]}
               reload={function(){
                 supabase.from("pending_approvals_summary").select("*").single()
                   .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
@@ -2399,17 +2402,24 @@ function ResidentPortal(props) {
           {tab==="info" && (
             isOwner
               ? <InfoTab
-                  maintenanceSlabs={resSlabs.length>0 ? resSlabs : (props.sharedProps ? props.sharedProps.maintenanceSlabs||[] : [])}
-                  ebDetails={ownerEB.length>0 ? ownerEB : []}
-                  employeeDetails={ownerStaff.length>0 ? ownerStaff : []}
-                  aptInfo={Object.keys(resAptInfo).length>0 ? resAptInfo : (props.sharedProps ? props.sharedProps.aptInfo||{} : {})}
-                  showToast={showToast} reload={function(){}} readOnly/>
-              : resInfoLoaded
-                ? <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
-                : <div style={{padding:"40px 20px",textAlign:"center",color:"var(--muted)"}}>
-                    <div style={{fontSize:24,marginBottom:8}}>⏳</div>
-                    <div style={{fontSize:13}}>Loading info…</div>
-                  </div>
+                  maintenanceSlabs={resSlabs}
+                  ebDetails={ownerEB}
+                  employeeDetails={ownerStaff}
+                  aptInfo={resAptInfo}
+                  showToast={showToast} reload={function(){
+                    Promise.all([
+                      supabase.from("maintenance_slabs").select("*").order("start_month"),
+                      supabase.from("apartment_info").select("*"),
+                      supabase.from("eb_details").select("*").order("block_name"),
+                      supabase.from("employee_details").select("*").order("name"),
+                    ]).then(function(r){
+                      if(r[0].data) setResSlabs(r[0].data);
+                      if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
+                      if(r[2].data) setOwnerEB(r[2].data);
+                      if(r[3].data) setOwnerStaff(r[3].data);
+                    });
+                  }} readOnly/>
+              : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
           )}
         </div>
 
@@ -2588,7 +2598,7 @@ function ApprovalsTab(props) {
   var emptyUserForm = {name:"",flat_id:"",role:"owner",phone:"",password:"",status:"active"};
   var [userForm, setUserForm] = useState(emptyUserForm);
   // Keep sec in ref so remounts don't reset it
-  var secRef = React.useRef("registrations");
+  var secRef = useRef("registrations");
   function setSecSafe(s){ secRef.current=s; setSec(s); }
 
   useEffect(function(){ 
