@@ -2131,6 +2131,24 @@ function ResidentPortal(props) {
     }
   },[]);
 
+  // Load info data fresh when info tab is clicked
+  useEffect(function(){
+    if (tab==="info" && !resInfoLoaded) {
+      Promise.all([
+        supabase.from("maintenance_slabs").select("*").order("start_month"),
+        supabase.from("apartment_info").select("*"),
+        supabase.from("eb_details").select("*").order("block_name"),
+        supabase.from("employee_details").select("*").order("name"),
+      ]).then(function(r){
+        if(r[0].data) setResSlabs(r[0].data);
+        if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
+        if(r[2].data) setOwnerEB(r[2].data);
+        if(r[3].data) setOwnerStaff(r[3].data);
+        setResInfoLoaded(true);
+      });
+    }
+  },[tab]);
+
   async function loadResidentData(){
     setLoading(true);
     var [b, p, s, n] = await Promise.all([
@@ -2404,19 +2422,21 @@ function ResidentPortal(props) {
                   ebDetails={ownerEB}
                   employeeDetails={ownerStaff}
                   aptInfo={resAptInfo}
-                  showToast={showToast} reload={function(){
-                    Promise.all([
+                  showToast={showToast}
+                  reload={async function(){
+                    var r = await Promise.all([
                       supabase.from("maintenance_slabs").select("*").order("start_month"),
                       supabase.from("apartment_info").select("*"),
                       supabase.from("eb_details").select("*").order("block_name"),
                       supabase.from("employee_details").select("*").order("name"),
-                    ]).then(function(r){
-                      if(r[0].data) setResSlabs(r[0].data);
-                      if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
-                      if(r[2].data) setOwnerEB(r[2].data);
-                      if(r[3].data) setOwnerStaff(r[3].data);
-                    });
-                  }} readOnly/>
+                    ]);
+                    if(r[0].data) setResSlabs(r[0].data);
+                    if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
+                    if(r[2].data) setOwnerEB(r[2].data);
+                    if(r[3].data) setOwnerStaff(r[3].data);
+                    setResInfoLoaded(true);
+                  }}
+                  readOnly/>
               : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
           )}
         </div>
@@ -2599,15 +2619,32 @@ function ApprovalsTab(props) {
   var secRef = useRef("registrations");
   function setSecSafe(s){ secRef.current=s; setSec(s); }
 
-  useEffect(function(){ 
-    setSec(secRef.current); // restore on remount
-    loadApprovals(); 
+  useEffect(function(){
+    setSec(secRef.current);
+    loadApprovals();
   },[]);
 
   useEffect(function(){
     if (editUser) setUserForm({name:editUser.name,flat_id:editUser.flat_id,role:editUser.role,phone:editUser.phone,password:"",status:editUser.status});
     else if (showAddUser) setUserForm(emptyUserForm);
-  }, [editUser, showAddUser]);
+  },[editUser, showAddUser]);
+
+  useEffect(function(){
+    if (tab === "info" && !resInfoLoaded) {
+      Promise.all([
+        supabase.from("maintenance_slabs").select("*").order("start_month"),
+        supabase.from("apartment_info").select("*"),
+        supabase.from("eb_details").select("*").order("block_name"),
+        supabase.from("employee_details").select("*").order("name"),
+      ]).then(function(r){
+        if(r[0].data) setResSlabs(r[0].data);
+        if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
+        if(r[2].data) setOwnerEB(r[2].data);
+        if(r[3].data) setOwnerStaff(r[3].data);
+        setResInfoLoaded(true);
+      });
+    }
+  },[tab]);
 
 
   async function saveUserForm() {
@@ -2746,14 +2783,14 @@ function ApprovalsTab(props) {
     await loadApprovals();
   }
 
-    async function approvePayment(sub){
+  async function approvePayment(sub){
     if(sub.status==="approved"){ props.showToast("ℹ️ Already approved"); return; }
-    // Prevent duplicate payment record
     var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month).single();
     if(!dup.error && dup.data){
       await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
       props.showToast("✅ Marked approved (payment already recorded)");
-      await loadApprovals();
+      // Immediately update local state so UI reflects change without full reload
+      setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
       return;
     }
     await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]});
@@ -2761,8 +2798,8 @@ function ApprovalsTab(props) {
     await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
     await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_approved",title:"Payment Approved ✅",body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",data:{flat_id:sub.flat_id,billing_month:sub.billing_month}});
     props.showToast("✅ Payment approved for Flat "+sub.flat_id);
-    await loadApprovals();
-    // Note: NOT calling props.reload() — it resets sec to "registrations"
+    // Immediately update local state
+    setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
   }
 
   async function rejectPayment(sub, reason){
@@ -2770,7 +2807,8 @@ function ApprovalsTab(props) {
     await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_rejected",title:"Payment Rejected ❌",body:"Your payment for "+monthLabel(sub.billing_month)+" was rejected. Reason: "+reason,data:{flat_id:sub.flat_id}});
     props.showToast("Payment rejected");
     setRejectForm(null);
-    await loadApprovals();
+    // Immediately update local state
+    setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"rejected",rejection_reason:reason}) : p; }); });
   }
 
   async function toggleAdmin(user){
@@ -2873,7 +2911,7 @@ function ApprovalsTab(props) {
           </div>
           {payments.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No payment submissions</div></div>}
           {pendingPays.length===0&&payments.length>0&&<div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--green)"}}>✅ All payments have been processed</div>}
-          {payments.map(function(p){
+          {payments.filter(function(p){return p.status==="pending";}).map(function(p){
             return (
               <div key={p.id} className="card" style={{marginBottom:12}}>
                 <div style={{padding:"12px 16px"}}>
@@ -2906,6 +2944,26 @@ function ApprovalsTab(props) {
               </div>
             );
           })}
+          {/* Recently processed */}
+          {payments.filter(function(p){return p.status!=="pending";}).length>0&&(
+            <div style={{marginTop:12}}>
+              <div style={{fontSize:11,color:"var(--muted)",fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Recently Processed</div>
+              {payments.filter(function(p){return p.status!=="pending";}).slice(0,5).map(function(p){
+                return (
+                  <div key={p.id} style={{padding:"10px 14px",borderRadius:10,background:"var(--card)",marginBottom:8,border:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center",opacity:0.7}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:600}}>Flat {p.flat_id} · {monthLabel(p.billing_month)}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.mode} · {p.transaction_date||p.created_at?.slice(0,10)}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:700,fontSize:13}}>{fmtRupee(p.amount)}</div>
+                      <div className={"chip "+(p.status==="approved"?"paid":"overdue")} style={{fontSize:10}}>{p.status}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
