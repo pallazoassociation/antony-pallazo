@@ -711,14 +711,14 @@ export default function App() {
       </header>
 
       <div className="content">
-        {tab==="home"     && <HomeTab     {...sharedProps}/>}
-        {tab==="flats"    && <FlatsTab    {...sharedProps}/>}
-        {tab==="overdue"  && <OverdueTab  {...sharedProps}/>}
-        {tab==="income"   && <IncomeTab   {...sharedProps} reload={loadData}/>}
-        {tab==="expenses" && <ExpensesTab {...sharedProps} reload={loadData}/>}
-        {tab==="reports"  && <ReportsTab  {...sharedProps}/>}
-        {tab==="info"     && <InfoTab     {...sharedProps} reload={loadData}/>}
-        {tab==="approvals"&& <ApprovalsTab {...sharedProps} reload={loadData}/>}
+        <div style={{display:tab==="home"?"block":"none"}}><HomeTab {...sharedProps}/></div>
+        <div style={{display:tab==="flats"?"block":"none"}}><FlatsTab {...sharedProps}/></div>
+        <div style={{display:tab==="overdue"?"block":"none"}}><OverdueTab {...sharedProps}/></div>
+        <div style={{display:tab==="income"?"block":"none"}}><IncomeTab {...sharedProps} reload={loadData}/></div>
+        <div style={{display:tab==="expenses"?"block":"none"}}><ExpensesTab {...sharedProps} reload={loadData}/></div>
+        <div style={{display:tab==="reports"?"block":"none"}}><ReportsTab {...sharedProps}/></div>
+        <div style={{display:tab==="info"?"block":"none"}}><InfoTab {...sharedProps} reload={loadData}/></div>
+        <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData}/></div>
       </div>
 
       <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
@@ -2616,11 +2616,7 @@ function ApprovalsTab(props) {
   var emptyUserForm = {name:"",flat_id:"",role:"owner",phone:"",password:"",status:"active"};
   var [userForm, setUserForm] = useState(emptyUserForm);
   // Keep sec in ref so remounts don't reset it
-  var secRef = useRef("registrations");
-  function setSecSafe(s){ secRef.current=s; setSec(s); }
-
   useEffect(function(){
-    setSec(secRef.current);
     loadApprovals();
   },[]);
 
@@ -2628,23 +2624,6 @@ function ApprovalsTab(props) {
     if (editUser) setUserForm({name:editUser.name,flat_id:editUser.flat_id,role:editUser.role,phone:editUser.phone,password:"",status:editUser.status});
     else if (showAddUser) setUserForm(emptyUserForm);
   },[editUser, showAddUser]);
-
-  useEffect(function(){
-    if (tab === "info" && !resInfoLoaded) {
-      Promise.all([
-        supabase.from("maintenance_slabs").select("*").order("start_month"),
-        supabase.from("apartment_info").select("*"),
-        supabase.from("eb_details").select("*").order("block_name"),
-        supabase.from("employee_details").select("*").order("name"),
-      ]).then(function(r){
-        if(r[0].data) setResSlabs(r[0].data);
-        if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
-        if(r[2].data) setOwnerEB(r[2].data);
-        if(r[3].data) setOwnerStaff(r[3].data);
-        setResInfoLoaded(true);
-      });
-    }
-  },[tab]);
 
 
   async function saveUserForm() {
@@ -2846,7 +2825,7 @@ function ApprovalsTab(props) {
           ? [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["users","👥 Users"]]
           : [["registrations","📝 Registrations"+(pendingRegs.length>0?" ("+pendingRegs.length+")":"")],["payments","💳 Payments"+(pendingPays.length>0?" ("+pendingPays.length+")":"")],["users","👥 Users"]]
         ).map(function(x){
-          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSecSafe(x[0]);}}>{x[1]}</button>;
+          return <button key={x[0]} className={"income-tab"+(sec===x[0]?" active":"")} onClick={function(){setSec(x[0]);}}>{x[1]}</button>;
         })}
       </div>
 
