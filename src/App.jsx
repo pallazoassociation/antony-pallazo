@@ -2168,51 +2168,26 @@ function ResidentPortal(props) {
     setLoading(false);
   }
 
-  // Poll for updates every 30 seconds (refreshes submissions and notifications)
+  // Poll every 15 seconds for submission/notification/bill updates
   useEffect(function(){
-    var interval = setInterval(function(){
+    function refresh(){
       Promise.all([
         supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
         supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
+        supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
+        supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
       ]).then(function(r){
         if(r[0].data) setSubmissions(r[0].data);
         if(r[1].data) setNotifications(r[1].data);
+        if(r[2].data) setBills(r[2].data);
+        if(r[3].data) setPayments(r[3].data);
       });
-    }, 30000);
+    }
+    var interval = setInterval(refresh, 15000);
     return function(){ clearInterval(interval); };
   },[]);
 
-  // Realtime subscription for payment_submissions — updates instantly when admin approves
-  useEffect(function(){
-    var channel = supabase
-      .channel("submissions-"+flatId)
-      .on("postgres_changes", {
-        event:"UPDATE", schema:"public", table:"payment_submissions",
-        filter:"flat_id=eq."+flatId
-      }, function(payload){
-        setSubmissions(function(prev){
-          return prev.map(function(s){
-            return s.id===payload.new.id ? Object.assign({},s,payload.new) : s;
-          });
-        });
-      })
-      .subscribe();
-    return function(){ supabase.removeChannel(channel); };
-  },[flatId]);
 
-  // Realtime subscription for notifications — updates instantly when admin sends one
-  useEffect(function(){
-    var channel2 = supabase
-      .channel("notifications-"+props.profile.id)
-      .on("postgres_changes", {
-        event:"INSERT", schema:"public", table:"notifications",
-        filter:"user_id=eq."+props.profile.id
-      }, function(payload){
-        setNotifications(function(prev){ return [payload.new].concat(prev); });
-      })
-      .subscribe();
-    return function(){ supabase.removeChannel(channel2); };
-  },[props.profile.id]);
 
   async function submitPayment(){
     if(!payForm.transaction_date){ showToast("⚠️ Enter payment date"); return; }
@@ -2267,16 +2242,18 @@ function ResidentPortal(props) {
   }
 
   var today = new Date();
-    var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
-    var overdueBills = bills.filter(function(b){
-      if (b.billing_month > curMonth) return false;
-      if (b.billing_month === curMonth && today.getDate() <= 15) return false;
-      return b.status==="overdue" && (b.arrears||0) > 0;
-    });
-    // pendingDue: current month counts as due even before 15th (shows ₹1800, not ₹0)
-    var pendingDue = bills.filter(function(b){
-      return b.status==="overdue" && b.billing_month <= curMonth;
-    });
+  var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+  var overdueBills = bills.filter(function(b){
+    if (b.billing_month > curMonth) return false;
+    if (b.billing_month === curMonth && today.getDate() <= 15) return false;
+    return b.status==="overdue" && (b.arrears||0) > 0;
+  });
+  // pendingDue: all unpaid months up to and including current month
+  var pendingDue = bills.filter(function(b){
+    return b.status==="overdue" && b.billing_month <= curMonth;
+  });
+  // pendingSubmissions: submissions that are still pending (not yet approved)
+  var pendingSubmissions = submissions.filter(function(s){ return s.status==="pending"; });
   var paidBills    = bills.filter(function(b){return b.status==="paid";});
   var totalDue     = pendingDue.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
   var unreadNotif  = notifications.filter(function(n){return !n.is_read;}).length;
@@ -2344,7 +2321,10 @@ function ResidentPortal(props) {
             </div>
 
             <div style={{margin:"14px 16px 0"}}>
-              <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:8}}>Recent Activity</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Recent Activity</div>
+                <button onClick={loadResidentData} style={{fontSize:11,color:"var(--gold)",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>🔄 Refresh</button>
+              </div>
               <div className="card">
                 {submissions.slice(0,5).map(function(s){
                   return <div key={s.id} style={{padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
