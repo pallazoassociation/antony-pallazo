@@ -2131,9 +2131,9 @@ function ResidentPortal(props) {
     }
   },[]);
 
-  // Load info data fresh when info tab is clicked
+  // Refresh data when specific tabs are clicked
   useEffect(function(){
-    if (tab==="info" && !resInfoLoaded) {
+    if (tab==="info") {
       Promise.all([
         supabase.from("maintenance_slabs").select("*").order("start_month"),
         supabase.from("apartment_info").select("*"),
@@ -2147,6 +2147,10 @@ function ResidentPortal(props) {
         setResInfoLoaded(true);
       });
     }
+    if (tab==="approvals" && isOwner) {
+      supabase.from("pending_approvals_summary").select("*").single()
+        .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
+    }
   },[tab]);
 
   async function loadResidentData(){
@@ -2155,7 +2159,7 @@ function ResidentPortal(props) {
       supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
       supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
       supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
-      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(20),
+      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
     ]);
     if(b.data) setBills(b.data);
     if(p.data) setPayments(p.data);
@@ -2163,6 +2167,20 @@ function ResidentPortal(props) {
     if(n.data) setNotifications(n.data);
     setLoading(false);
   }
+
+  // Poll for updates every 30 seconds (refreshes submissions and notifications)
+  useEffect(function(){
+    var interval = setInterval(function(){
+      Promise.all([
+        supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
+        supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
+      ]).then(function(r){
+        if(r[0].data) setSubmissions(r[0].data);
+        if(r[1].data) setNotifications(r[1].data);
+      });
+    }, 30000);
+    return function(){ clearInterval(interval); };
+  },[]);
 
   async function submitPayment(){
     if(!payForm.transaction_date){ showToast("⚠️ Enter payment date"); return; }
@@ -2244,7 +2262,15 @@ function ResidentPortal(props) {
           </div>
           <div style={{display:"flex",gap:8}}>
             <button style={{width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={function(){setShowChangePass(true);}}>🔒</button>
-            <button style={{position:"relative",width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={function(){setTab("notifications");}}>
+            <button style={{position:"relative",width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}} onClick={async function(){
+              setTab("notifications");
+              // Refresh from DB to get latest (including new approval notifications)
+              var fresh = await supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30);
+              if(fresh.data) setNotifications(fresh.data);
+              // Mark all as read
+              await supabase.from("notifications").update({is_read:true}).eq("user_id",props.profile.id).eq("is_read",false);
+              setNotifications(function(prev){return prev.map(function(n){return Object.assign({},n,{is_read:true});});});
+            }}>
               🔔{unreadNotif>0&&<span style={{position:"absolute",top:4,right:4,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:8,fontWeight:700,padding:"1px 4px"}}>{unreadNotif}</span>}
             </button>
             <button onClick={props.onLogout} style={{width:36,height:36,borderRadius:9,border:"none",cursor:"pointer",background:"rgba(255,255,255,.1)",color:"#FFF",fontSize:16}}>🚪</button>
