@@ -2182,6 +2182,38 @@ function ResidentPortal(props) {
     return function(){ clearInterval(interval); };
   },[]);
 
+  // Realtime subscription for payment_submissions — updates instantly when admin approves
+  useEffect(function(){
+    var channel = supabase
+      .channel("submissions-"+flatId)
+      .on("postgres_changes", {
+        event:"UPDATE", schema:"public", table:"payment_submissions",
+        filter:"flat_id=eq."+flatId
+      }, function(payload){
+        setSubmissions(function(prev){
+          return prev.map(function(s){
+            return s.id===payload.new.id ? Object.assign({},s,payload.new) : s;
+          });
+        });
+      })
+      .subscribe();
+    return function(){ supabase.removeChannel(channel); };
+  },[flatId]);
+
+  // Realtime subscription for notifications — updates instantly when admin sends one
+  useEffect(function(){
+    var channel2 = supabase
+      .channel("notifications-"+props.profile.id)
+      .on("postgres_changes", {
+        event:"INSERT", schema:"public", table:"notifications",
+        filter:"user_id=eq."+props.profile.id
+      }, function(payload){
+        setNotifications(function(prev){ return [payload.new].concat(prev); });
+      })
+      .subscribe();
+    return function(){ supabase.removeChannel(channel2); };
+  },[props.profile.id]);
+
   async function submitPayment(){
     if(!payForm.transaction_date){ showToast("⚠️ Enter payment date"); return; }
     setSaving(true);
@@ -2441,30 +2473,33 @@ function ResidentPortal(props) {
               ownerFlatId={flatId}
             />
           )}
-          {tab==="info" && (
-            isOwner
+          {/* Info tab - always mounted to prevent blank on first click */}
+          <div style={{display:tab==="info"?"block":"none"}}>
+            {isOwner
               ? <InfoTab
                   maintenanceSlabs={resSlabs}
                   ebDetails={ownerEB}
                   employeeDetails={ownerStaff}
                   aptInfo={resAptInfo}
                   showToast={showToast}
-                  reload={async function(){
-                    var r = await Promise.all([
+                  reload={function(){
+                    Promise.all([
                       supabase.from("maintenance_slabs").select("*").order("start_month"),
                       supabase.from("apartment_info").select("*"),
                       supabase.from("eb_details").select("*").order("block_name"),
                       supabase.from("employee_details").select("*").order("name"),
-                    ]);
-                    if(r[0].data) setResSlabs(r[0].data);
-                    if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
-                    if(r[2].data) setOwnerEB(r[2].data);
-                    if(r[3].data) setOwnerStaff(r[3].data);
-                    setResInfoLoaded(true);
+                    ]).then(function(r){
+                      if(r[0].data) setResSlabs(r[0].data);
+                      if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
+                      if(r[2].data) setOwnerEB(r[2].data);
+                      if(r[3].data) setOwnerStaff(r[3].data);
+                      setResInfoLoaded(true);
+                    });
                   }}
                   readOnly/>
               : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
-          )}
+            }
+          </div>
         </div>
 
         <nav className="res-tabs" style={{overflowX:"auto",justifyContent:"flex-start"}}>
