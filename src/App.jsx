@@ -2069,6 +2069,21 @@ function ResidentPortal(props) {
 
   function showToast(msg){ setToast(msg); setTimeout(function(){setToast(null);},2800); }
 
+  async function loadResidentData(){
+    setLoading(true);
+    var [b, p, s, n] = await Promise.all([
+      supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
+      supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
+      supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
+      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
+    ]);
+    if(b.data) setBills(b.data);
+    if(p.data) setPayments(p.data);
+    if(s.data) setSubmissions(s.data);
+    if(n.data) setNotifications(n.data);
+    setLoading(false);
+  }
+
   useEffect(function(){
     loadResidentData();
     // Load slabs + apt info for ALL roles (tenant needs maintenance charges)
@@ -2130,20 +2145,7 @@ function ResidentPortal(props) {
     }
   },[tab]);
 
-  async function loadResidentData(){
-    setLoading(true);
-    var [b, p, s, n] = await Promise.all([
-      supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
-      supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
-      supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
-      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
-    ]);
-    if(b.data) setBills(b.data);
-    if(p.data) setPayments(p.data);
-    if(s.data) setSubmissions(s.data);
-    if(n.data) setNotifications(n.data);
-    setLoading(false);
-  }
+
 
   // Poll every 15 seconds for submission/notification/bill updates
   useEffect(function(){
