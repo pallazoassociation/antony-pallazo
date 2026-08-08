@@ -564,32 +564,9 @@ export default function App() {
 
   // ── Resident portal (owner/tenant) ────────────────────────────
   if (userProfile && (userProfile.role==="owner"||userProfile.role==="tenant")) {
-    // For owners: trigger loadData so sharedProps has income/expense/reports data
-    // This runs once when owner logs in (session effect already calls loadData)
-    var ownerSharedProps = null;
-    if (userProfile.role==="owner" && flats.length > 0) {
-      // Data is loaded — build a safe read-only sharedProps for owner
-      ownerSharedProps = {
-        flats, monthlySummaries, monthBillsData, overdueBills, allPayments, allExpenses,
-        otherIncome, corpusData, fdData, acctSettings,
-        bankBal: parseFloat((liveBalance||{}).net_bank_balance||acctSettings.net_bank_balance||0),
-        activeFD: parseFloat((liveBalance||{}).active_fd_amount||acctSettings.active_fd_amount||0),
-        totalMaint: parseFloat((liveBalance||{}).total_maintenance||acctSettings.total_maintenance||0),
-        totalCorpus: parseFloat((liveBalance||{}).total_corpus||acctSettings.total_corpus||0),
-        totalOtherInc: parseFloat((liveBalance||{}).total_other_income||acctSettings.total_other_income||0),
-        fdMatured: parseFloat((liveBalance||{}).total_fd_matured||acctSettings.total_fd_matured||0),
-        totalExpAmt: parseFloat((liveBalance||{}).total_expenses||acctSettings.total_expenses||0),
-        totalIncome: 0,
-        maintenanceSlabs, ebDetails, employeeDetails, aptInfo,
-        showToast: function(msg){ /* no-op for now */ },
-        selMonth: getCurrentMonth(), setSelMonth: function(){},
-        userProfile: userProfile,
-        pendingCount: pendingCount,
-      };
-    }
     return <ResidentPortal
       profile={userProfile}
-      sharedProps={ownerSharedProps}
+      sharedProps={null}
       onLogout={function(){
         localStorage.removeItem("pallazo_temp_session");
         setSession(null); setUserProfile(null);
@@ -2807,18 +2784,19 @@ function ApprovalsTab(props) {
     if(sub.status==="approved"){ props.showToast("ℹ️ Already approved"); return; }
     var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month).single();
     if(!dup.error && dup.data){
+      // Payment record exists — still ensure bill is paid and submission marked approved
+      await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
       await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
-      props.showToast("✅ Marked approved (payment already recorded)");
-      // Immediately update local state so UI reflects change without full reload
+      props.showToast("✅ Payment approved for Flat "+sub.flat_id);
       setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
       return;
     }
+    // No existing payment — create one and update bill
     await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]});
     await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
     await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
     await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_approved",title:"Payment Approved ✅",body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",data:{flat_id:sub.flat_id,billing_month:sub.billing_month}});
     props.showToast("✅ Payment approved for Flat "+sub.flat_id);
-    // Immediately update local state
     setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
   }
 
