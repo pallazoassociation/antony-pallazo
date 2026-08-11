@@ -2016,201 +2016,181 @@ function InfoTab(props) {
 
 // ── ResidentPortal ─────────────────────────────────────────────
 function ResidentPortal(props) {
-  var [tab, setTab]   = useState("home");
-  var [bills, setBills] = useState([]);
-  var [payments, setPayments] = useState([]);
-  var [submissions, setSubmissions] = useState([]);
+  var flatId  = props.profile.flat_id;
+  var isOwner = props.profile.role === "owner";
+
+  // ── State ──────────────────────────────────────────────────
+  var [tab, setTab]         = useState("home");
   var [loading, setLoading] = useState(true);
-  var [showPayForm, setShowPayForm] = useState(false);
-  var [payForm, setPayForm] = useState({billing_month:getCurrentMonth(),amount:"",mode:"UPI",reference:"",notes:"",transaction_date:new Date().toISOString().split("T")[0],payType:"single",months:[]});
-  var [saving, setSaving] = useState(false);
-  var [toast, setToast] = useState(null);
+  var [toast, setToast]     = useState(null);
+  var [bills, setBills]     = useState([]);
+  var [payments, setPayments]     = useState([]);
+  var [submissions, setSubmissions] = useState([]);
   var [notifications, setNotifications] = useState([]);
-  var [file, setFile] = useState(null);
+  var [file, setFile]       = useState(null);
+  var [showPayForm, setShowPayForm] = useState(false);
+  var [saving, setSaving]   = useState(false);
+  var [payForm, setPayForm] = useState({
+    billing_month:getCurrentMonth(), amount:"", mode:"UPI",
+    reference:"", notes:"",
+    transaction_date:new Date().toISOString().split("T")[0],
+    payType:"single", months:[]
+  });
+  // Change password
   var [showChangePass, setShowChangePass] = useState(false);
   var [passForm, setPassForm] = useState({current:"",next:"",confirm:""});
   var [passSaving, setPassSaving] = useState(false);
   var [passErr, setPassErr] = useState("");
-  var [pendingCount, setPendingCount] = useState(0);
-  var [resSlabs, setResSlabs] = useState([]);
+  // Info data (loaded when info tab clicked)
+  var [resSlabs, setResSlabs]     = useState([]);
   var [resAptInfo, setResAptInfo] = useState({});
-  var [resInfoLoaded, setResInfoLoaded] = useState(false);
-  var [ownerExpenses, setOwnerExpenses] = useState([]);
-  var [ownerEB, setOwnerEB] = useState([]);
+  var [ownerEB, setOwnerEB]       = useState([]);
   var [ownerStaff, setOwnerStaff] = useState([]);
-  var [ownerSelMonth, setOwnerSelMonth] = useState(getCurrentMonth());
-  var [ownerIncome, setOwnerIncome] = useState([]);
-  var [ownerCorpus, setOwnerCorpus] = useState([]);
-  var [ownerFD, setOwnerFD] = useState([]);
+  // Owner financial data
+  var [ownerExpenses, setOwnerExpenses] = useState([]);
+  var [ownerIncome, setOwnerIncome]     = useState([]);
+  var [ownerCorpus, setOwnerCorpus]     = useState([]);
+  var [ownerFD, setOwnerFD]             = useState([]);
   var [ownerPayments, setOwnerPayments] = useState([]);
   var [ownerMonthlySummary, setOwnerMonthlySummary] = useState([]);
-  var [ownerOverdue, setOwnerOverdue] = useState([]);
-  var flatId = props.profile.flat_id;
-  var isOwner = props.profile.role === "owner";
-  var sp = props.sharedProps;
+  var [ownerOverdue, setOwnerOverdue]   = useState([]);
+  var [ownerSelMonth, setOwnerSelMonth] = useState(getCurrentMonth());
+  var [pendingCount, setPendingCount]   = useState(0);
 
-  async function changePassword() {
-    setPassErr("");
-    if (!passForm.current||!passForm.next||!passForm.confirm) { setPassErr("Fill all fields"); return; }
-    if (passForm.next !== passForm.confirm) { setPassErr("New passwords don't match"); return; }
-    if (passForm.next.length < 6) { setPassErr("Password must be at least 6 characters"); return; }
-    setPassSaving(true);
-    var check = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
-    if (check.error || check.data.password_hash !== passForm.current) {
-      setPassErr("Current password is incorrect"); setPassSaving(false); return;
-    }
-    var upd = await supabase.from("resident_users").update({password_hash:passForm.next}).eq("id",props.profile.id);
-    setPassSaving(false);
-    if (upd.error) { setPassErr(upd.error.message); return; }
-    showToast("✅ Password changed successfully!");
-    setShowChangePass(false);
-    setPassForm({current:"",next:"",confirm:""});
-  }
+  function showToast(msg) { setToast(msg); setTimeout(function(){ setToast(null); }, 2800); }
 
-  function showToast(msg){ setToast(msg); setTimeout(function(){setToast(null);},2800); }
-
-  async function loadResidentData(){
+  // ── Load resident flat data ────────────────────────────────
+  async function loadResidentData() {
     setLoading(true);
-    var [b, p, s, n] = await Promise.all([
-      supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
-      supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
-      supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
-      supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
-    ]);
-    if(b.data) setBills(b.data);
-    if(p.data) setPayments(p.data);
-    if(s.data) setSubmissions(s.data);
-    if(n.data) setNotifications(n.data);
+    try {
+      var [b, p, s, n] = await Promise.all([
+        supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
+        supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
+        supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
+        supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
+      ]);
+      if(b.data) setBills(b.data);
+      if(p.data) setPayments(p.data);
+      if(s.data) setSubmissions(s.data);
+      if(n.data) setNotifications(n.data);
+    } catch(e) { console.error("loadResidentData error:", e); }
     setLoading(false);
   }
 
-  useEffect(function(){
-    loadResidentData();
-    // Load slabs + apt info for ALL roles (tenant needs maintenance charges)
+  // ── Load owner financial data (separate, non-blocking) ────
+  function loadOwnerData() {
+    Promise.all([
+      supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
+      supabase.from("other_income").select("*").order("received_date",{ascending:false}),
+      supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
+      supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
+      supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
+      supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
+    ]).then(function(r){
+      if(r[0].data) setOwnerExpenses(r[0].data);
+      if(r[1].data) setOwnerIncome(r[1].data);
+      if(r[2].data) setOwnerCorpus(r[2].data);
+      if(r[3].data) setOwnerFD(r[3].data);
+      if(r[4].data) setOwnerMonthlySummary(r[4].data);
+      if(r[5].data) setOwnerOverdue(r[5].data);
+    }).catch(function(e){ console.error("loadOwnerData error:", e); });
+  }
+
+  // ── Load info tab data ─────────────────────────────────────
+  function loadInfoData() {
     Promise.all([
       supabase.from("maintenance_slabs").select("*").order("start_month"),
       supabase.from("apartment_info").select("*"),
-    ]).then(function(results){
-      if(results[0].data) setResSlabs(results[0].data);
-      if(results[1].data){ var ai={}; results[1].data.forEach(function(r){ai[r.key]=r.value;}); setResAptInfo(ai); }
-      setResInfoLoaded(true);
-    });
-    // Load full financial data for owners directly (no dependency on parent sharedProps)
-    if(isOwner){
-      Promise.all([
-        supabase.from("expenses").select("*").order("expense_date",{ascending:false}).limit(500),
-        supabase.from("eb_details").select("*").order("block_name"),
-        supabase.from("employee_details").select("*").order("name"),
-        supabase.from("other_income").select("*").order("received_date",{ascending:false}),
-        supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),
-        supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),
-        supabase.from("payments").select("*").order("payment_date",{ascending:false}).limit(500),
-        supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),
-        supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month"),
-        supabase.from("pending_approvals_summary").select("*").single(),
-      ]).then(function(r){
-        if(r[0].data) setOwnerExpenses(r[0].data);
-        if(r[1].data) setOwnerEB(r[1].data);
-        if(r[2].data) setOwnerStaff(r[2].data);
-        if(r[3].data) setOwnerIncome(r[3].data);
-        if(r[4].data) setOwnerCorpus(r[4].data);
-        if(r[5].data) setOwnerFD(r[5].data);
-        if(r[6].data) setOwnerPayments(r[6].data);
-        if(r[7].data) setOwnerMonthlySummary(r[7].data);
-        if(r[8].data) setOwnerOverdue(r[8].data);
-        if(r[9].data) setPendingCount((r[9].data.pending_registrations||0)+(r[9].data.pending_payments||0));
-      });
+      supabase.from("eb_details").select("*").order("block_name"),
+      supabase.from("employee_details").select("*").order("name"),
+      supabase.from("pending_approvals_summary").select("*").single(),
+    ]).then(function(r){
+      if(r[0].data) setResSlabs(r[0].data);
+      if(r[1].data){ var ai={}; r[1].data.forEach(function(x){ai[x.key]=x.value;}); setResAptInfo(ai); }
+      if(r[2].data) setOwnerEB(r[2].data);
+      if(r[3].data) setOwnerStaff(r[3].data);
+      if(r[4].data) setPendingCount((r[4].data.pending_registrations||0)+(r[4].data.pending_payments||0));
+    }).catch(function(e){ console.error("loadInfoData error:", e); });
+  }
+
+  // ── Effects ────────────────────────────────────────────────
+  useEffect(function(){
+    loadResidentData();
+    if(isOwner) {
+      // Stagger owner data loads to avoid overwhelming connections
+      setTimeout(loadOwnerData, 500);
+      setTimeout(loadInfoData, 1000);
+    } else {
+      // Tenant: just load info (slabs + bank)
+      setTimeout(loadInfoData, 500);
     }
   },[]);
 
-  // Refresh data when specific tabs are clicked
+  // When tab changes, reload relevant data
   useEffect(function(){
-    if (tab==="info") {
-      Promise.all([
-        supabase.from("maintenance_slabs").select("*").order("start_month"),
-        supabase.from("apartment_info").select("*"),
-        supabase.from("eb_details").select("*").order("block_name"),
-        supabase.from("employee_details").select("*").order("name"),
-      ]).then(function(r){
-        if(r[0].data) setResSlabs(r[0].data);
-        if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
-        if(r[2].data) setOwnerEB(r[2].data);
-        if(r[3].data) setOwnerStaff(r[3].data);
-        setResInfoLoaded(true);
-      });
-    }
-    if (tab==="approvals" && isOwner) {
-      supabase.from("pending_approvals_summary").select("*").single()
-        .then(function(r){ if(r.data) setPendingCount((r.data.pending_registrations||0)+(r.data.pending_payments||0)); });
-    }
+    if(tab==="info") loadInfoData();
+    if(tab==="approvals" && isOwner) loadInfoData();
   },[tab]);
 
-
-
-  // Poll every 15 seconds for submission/notification/bill updates
+  // Poll every 15s for fresh submissions/notifications/bills
   useEffect(function(){
-    function refresh(){
+    var t = setInterval(function(){
       Promise.all([
         supabase.from("payment_submissions").select("*").eq("flat_id",flatId).order("created_at",{ascending:false}),
         supabase.from("notifications").select("*").eq("user_id",props.profile.id).order("created_at",{ascending:false}).limit(30),
         supabase.from("flat_month_status").select("*").eq("flat_id",flatId).order("billing_month",{ascending:false}),
-        supabase.from("payments").select("*").eq("flat_id",flatId).order("payment_date",{ascending:false}),
       ]).then(function(r){
         if(r[0].data) setSubmissions(r[0].data);
         if(r[1].data) setNotifications(r[1].data);
         if(r[2].data) setBills(r[2].data);
-        if(r[3].data) setPayments(r[3].data);
       });
-    }
-    var interval = setInterval(refresh, 15000);
-    return function(){ clearInterval(interval); };
+    }, 15000);
+    return function(){ clearInterval(t); };
   },[]);
 
+  // ── Change password ────────────────────────────────────────
+  async function changePassword() {
+    setPassErr("");
+    if(!passForm.current||!passForm.next||!passForm.confirm){ setPassErr("Fill all fields"); return; }
+    if(passForm.next!==passForm.confirm){ setPassErr("Passwords don't match"); return; }
+    if(passForm.next.length<6){ setPassErr("Min 6 characters"); return; }
+    setPassSaving(true);
+    var chk = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
+    if(chk.error||chk.data.password_hash!==passForm.current){ setPassErr("Current password incorrect"); setPassSaving(false); return; }
+    await supabase.from("resident_users").update({password_hash:passForm.next}).eq("id",props.profile.id);
+    setPassSaving(false);
+    showToast("✅ Password changed!");
+    setShowChangePass(false);
+    setPassForm({current:"",next:"",confirm:""});
+  }
 
-
-  async function submitPayment(){
+  // ── Submit payment ─────────────────────────────────────────
+  async function submitPayment() {
     if(!payForm.transaction_date){ showToast("⚠️ Enter payment date"); return; }
     setSaving(true);
     var screenshotUrl = null;
     if(file){
       var fname = flatId+"-"+Date.now()+"."+file.name.split(".").pop();
       var up = await supabase.storage.from("payment-screenshots").upload(fname, file);
-      if(!up.error){ var pub = supabase.storage.from("payment-screenshots").getPublicUrl(fname); screenshotUrl = pub.data.publicUrl; }
+      if(!up.error){ screenshotUrl = supabase.storage.from("payment-screenshots").getPublicUrl(fname).data.publicUrl; }
     }
-
     if(payForm.payType==="advance"){
       var months = payForm.months||[];
       if(months.length===0){ showToast("⚠️ Select at least one month"); setSaving(false); return; }
-      if(!payForm.amount||parseInt(payForm.amount)<=0){ showToast("⚠️ Enter amount per month"); setSaving(false); return; }
-      // Submit one payment submission per month
+      if(!payForm.amount||parseInt(payForm.amount)<=0){ showToast("⚠️ Enter amount"); setSaving(false); return; }
       var inserts = months.map(function(bm){
         return {flat_id:flatId,billing_month:bm,amount:parseInt(payForm.amount),mode:payForm.mode,
           reference_no:payForm.reference||null,notes:payForm.notes||null,
           screenshot_url:screenshotUrl,submitted_by:props.profile.id,status:"pending",
           transaction_date:payForm.transaction_date||null};
       });
-      var res = await supabase.from("payment_submissions").insert(inserts);
-      if(res.error){ showToast("❌ "+res.error.message); setSaving(false); return; }
-      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",
-        title:"Advance Payment Submitted",
-        body:"Flat "+flatId+" submitted advance payment for "+months.length+" months: "+months.map(monthLabel).join(", "),
-        data:{flat_id:flatId}});
+      await supabase.from("payment_submissions").insert(inserts);
+      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",title:"Advance Payment Submitted",body:"Flat "+flatId+" submitted advance for "+months.length+" months",data:{flat_id:flatId}});
       showToast("✅ Advance payment submitted for "+months.length+" month(s)!");
     } else {
-      // Single month
-      if(!payForm.billing_month||!payForm.amount||!payForm.mode){ showToast("⚠️ Fill all required fields"); setSaving(false); return; }
-      var res2 = await supabase.from("payment_submissions").insert({
-        flat_id:flatId,billing_month:payForm.billing_month,
-        amount:parseInt(payForm.amount),mode:payForm.mode,
-        reference_no:payForm.reference||null,notes:payForm.notes||null,
-        screenshot_url:screenshotUrl,submitted_by:props.profile.id,status:"pending",
-        transaction_date:payForm.transaction_date||null
-      });
-      if(res2.error){ showToast("❌ "+res2.error.message); setSaving(false); return; }
-      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",
-        title:"Payment Submitted",
-        body:"Flat "+flatId+" submitted ₹"+payForm.amount+" for "+monthLabel(payForm.billing_month),
-        data:{flat_id:flatId,billing_month:payForm.billing_month,amount:payForm.amount}});
+      if(!payForm.billing_month||!payForm.amount||!payForm.mode){ showToast("⚠️ Fill required fields"); setSaving(false); return; }
+      await supabase.from("payment_submissions").insert({flat_id:flatId,billing_month:payForm.billing_month,amount:parseInt(payForm.amount),mode:payForm.mode,reference_no:payForm.reference||null,notes:payForm.notes||null,screenshot_url:screenshotUrl,submitted_by:props.profile.id,status:"pending",transaction_date:payForm.transaction_date||null});
+      await supabase.from("notifications").insert({user_id:null,type:"payment_submission",title:"Payment Submitted",body:"Flat "+flatId+" submitted ₹"+payForm.amount+" for "+monthLabel(payForm.billing_month),data:{flat_id:flatId,billing_month:payForm.billing_month}});
       showToast("✅ Payment submitted! Awaiting admin approval.");
     }
     setSaving(false);
@@ -2220,22 +2200,13 @@ function ResidentPortal(props) {
     await loadResidentData();
   }
 
-  var today = new Date();
+  // ── Derived state ──────────────────────────────────────────
+  var today   = new Date();
   var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
-  var overdueBills = bills.filter(function(b){
-    if (b.billing_month > curMonth) return false;
-    if (b.billing_month === curMonth && today.getDate() <= 15) return false;
-    return b.status==="overdue" && (b.arrears||0) > 0;
-  });
-  // pendingDue: all unpaid months up to and including current month
-  var pendingDue = bills.filter(function(b){
-    return b.status==="overdue" && b.billing_month <= curMonth;
-  });
-  // pendingSubmissions: submissions that are still pending (not yet approved)
-  var pendingSubmissions = submissions.filter(function(s){ return s.status==="pending"; });
-  var paidBills    = bills.filter(function(b){return b.status==="paid";});
-  var totalDue     = pendingDue.reduce(function(s,b){return s+(b.arrears||b.total_amount||0);},0);
-  var unreadNotif  = notifications.filter(function(n){return !n.is_read;}).length;
+  var overdueBills = bills.filter(function(b){ return b.status==="overdue" && b.billing_month <= curMonth; });
+  var paidBills    = bills.filter(function(b){ return b.status==="paid"; });
+  var totalDue     = overdueBills.reduce(function(s,b){ return s+(b.arrears||b.total_amount||0); },0);
+  var unreadNotif  = notifications.filter(function(n){ return !n.is_read; }).length;
 
   if(loading) return <LoadingScreen msg="Loading your flat details…" dots/>;
 
