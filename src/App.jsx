@@ -1307,8 +1307,8 @@ function IncomeTab(props) {
   var [formType, setFormType] = useState("other"); // other | corpus | fd
   var [form, setForm]         = useState({});
 
-  var totalFdMat = props.fdData.filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0);
-  var totalFdInv = props.fdData.reduce(function(s,f){return s+(f.invested_amount||0);},0);
+  var totalFdMat = (props.fdData||[]).filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0);
+  var totalFdInv = (props.fdData||[]).reduce(function(s,f){return s+(f.invested_amount||0);},0);
 
   function openAdd(type) { setFormType(type); setEditing(null); setForm({}); setShowForm(true); }
   function openEdit(type, item) { setFormType(type); setEditing(item); setForm({...item}); setShowForm(true); }
@@ -1366,11 +1366,11 @@ function IncomeTab(props) {
       {sec==="other" && (
         <div style={{padding:"10px 16px 24px"}}>
           <div className="row-between mb14" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).length} records</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.otherIncome||[]).filter(function(x){return x.source!=="Opening Bank Balance";}).length} records</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("other");}}>＋ Add Income</button>}
           </div>
           <div className="card">
-            {props.otherIncome.filter(function(x){return x.source!=="Opening Bank Balance";}).map(function(item,i){
+            {(props.otherIncome||[]).filter(function(x){return x.source!=="Opening Bank Balance";}).map(function(item,i){
               var icon = item.source&&(item.source.toLowerCase().includes("fd")||item.source.toLowerCase().includes("fixed"))?"🏦":item.source&&item.source.toLowerCase().includes("interest")?"📈":"💵";
               return (
                 <div key={item.id||i} className="income-item">
@@ -1396,14 +1396,14 @@ function IncomeTab(props) {
           <div style={{background:"linear-gradient(135deg,#B8860B,#D4A853)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
             <div style={{color:"rgba(255,255,255,.7)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase"}}>Total Corpus Fund</div>
             <div style={{color:"#FFF",fontSize:26,fontWeight:700,fontFamily:"'Playfair Display',serif",marginTop:4}}>{fmtRupee(props.totalCorpus)}</div>
-            <div style={{color:"rgba(255,255,255,.7)",fontSize:12,marginTop:4}}>{props.corpusData.length} of 30 flats paid</div>
+            <div style={{color:"rgba(255,255,255,.7)",fontSize:12,marginTop:4}}>{(props.corpusData||[]).length} of 30 flats paid</div>
           </div>
           <div className="row-between" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.corpusData.length} entries</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.corpusData||[]).length} entries</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("corpus");}}>＋ Add Entry</button>}
           </div>
           <div className="card">
-            {props.corpusData.map(function(c,i){
+            {(props.corpusData||[]).map(function(c,i){
               return (
                 <div key={c.id||i} className="corpus-item">
                   <div><div className="corpus-flat">Flat {c.flat_id}</div><div className="corpus-date">{c.paid_date||"—"} · {c.mode||"—"}</div></div>
@@ -1425,10 +1425,10 @@ function IncomeTab(props) {
       {sec==="fd" && (
         <div style={{padding:"10px 16px 24px"}}>
           <div className="row-between" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.fdData.length} FD account{props.fdData.length!==1?"s":""}</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.fdData||[]).length} FD account{(props.fdData||[]).length!==1?"s":""}</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("fd");}}>＋ Add FD</button>}
           </div>
-          {props.fdData.map(function(fd,i){
+          {(props.fdData||[]).map(function(fd,i){
             return (
               <div key={fd.id||i} className="fd-card" style={{marginBottom:12}}>
                 <div className="fd-header" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -1525,7 +1525,7 @@ function ExpensesTab(props) {
   var emptyForm = {vendor:"",category:"Salary",amount:"",expense_date:"",billing_month:props.selMonth,invoice_no:""};
   var [form, setForm]         = useState(emptyForm);
 
-  var displayed = viewAll ? props.allExpenses : props.monthExp;
+  var displayed = viewAll ? (props.allExpenses||[]) : (props.monthExp||[]);
   var total = displayed.reduce(function(s,e){return s+e.amount;},0);
   var bycat = {};
   displayed.forEach(function(e){ bycat[e.category]=(bycat[e.category]||0)+e.amount; });
@@ -1574,7 +1574,7 @@ function ExpensesTab(props) {
       </div>
 
       <div className="section row-between">
-        <div className="sec-title" style={{marginBottom:0}}>{viewAll?"All Expenses ("+props.allExpenses.length+")":monthLabel(props.selMonth)+" ("+props.monthExp.length+")"}</div>
+        <div className="sec-title" style={{marginBottom:0}}>{viewAll?"All Expenses ("+(props.allExpenses||[]).length+")":monthLabel(props.selMonth)+" ("+(props.monthExp||[]).length+")"}</div>
         <div style={{display:"flex",gap:8}}>
           {!props.readOnly && <button className="add-btn" onClick={openAdd}>＋ Add</button>}
           <button className="add-btn" style={{background:viewAll?"var(--muted)":"var(--gold)"}} onClick={function(){setViewAll(function(v){return !v;});}}>
@@ -1761,9 +1761,9 @@ function InfoTab(props) {
           {[
             ["Total Flats", props.aptInfo.total_flats||30],
             ["Due Day",     props.aptInfo.due_day||"10"],
-            ["3 BHK",       props.flats.filter(function(f){return f.bhk_type==="3BHK";}).length||6],
-            ["2 BHK",       props.flats.filter(function(f){return f.bhk_type==="2BHK";}).length||17],
-            ["1 BHK",       props.flats.filter(function(f){return f.bhk_type==="1BHK";}).length||7],
+            ["3 BHK",       (props.flats||[]).filter(function(f){return f.bhk_type==="3BHK";}).length||6],
+            ["2 BHK",       (props.flats||[]).filter(function(f){return f.bhk_type==="2BHK";}).length||17],
+            ["1 BHK",       (props.flats||[]).filter(function(f){return f.bhk_type==="1BHK";}).length||7],
           ].map(function(x){
             return <div key={x[0]}><div style={{color:"rgba(255,255,255,.4)",fontSize:10}}>{x[0]}</div><div style={{color:"#FFF",fontWeight:700,fontSize:14,marginTop:2}}>{x[1]}</div></div>;
           })}
@@ -1787,11 +1787,11 @@ function InfoTab(props) {
             <b>⚠️ Important:</b> When changing maintenance amount, set the <b>End Month</b> on the old slab, then add a new slab with the new amount and <b>Start Month</b>. Then use <b>Recalculate Bills</b> to update all affected bills — flats that paid advance will show the difference as overdue.
           </div>}
           <div className="row-between" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.maintenanceSlabs.length} slabs</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.maintenanceSlabs||[]).length} slabs</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("slab");}}>＋ Add Slab</button>}
           </div>
           <div className="card">
-            {props.maintenanceSlabs.map(function(s,i){
+            {(props.maintenanceSlabs||[]).map(function(s,i){
               return (
                 <div key={s.id||i} style={{borderBottom:"1px solid var(--border)"}}>
                   <div style={{padding:"12px 16px"}}>
@@ -1853,11 +1853,11 @@ function InfoTab(props) {
       {sec==="eb" && (
         <div style={G}>
           <div className="row-between" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.ebDetails.length} blocks</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.ebDetails||[]).length} blocks</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("eb");}}>＋ Add Block</button>}
           </div>
           <div className="card">
-            {props.ebDetails.map(function(e,i){
+            {(props.ebDetails||[]).map(function(e,i){
               return (
                 <div key={e.id||i} className="info-row">
                   <div>
@@ -1884,16 +1884,16 @@ function InfoTab(props) {
           <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)",marginBottom:14}}>
             <div style={{fontSize:10,color:"var(--muted)",letterSpacing:"1px",textTransform:"uppercase",marginBottom:6}}>Monthly Salary Total</div>
             <div style={{fontSize:24,fontWeight:700,fontFamily:"'Playfair Display',serif",color:"var(--red)"}}>
-              {fmtRupee(props.employeeDetails.filter(function(e){return e.active;}).reduce(function(s,e){return s+e.salary;},0))}
+              {fmtRupee((props.employeeDetails||[]).filter(function(e){return e.active;}).reduce(function(s,e){return s+e.salary;},0))}
             </div>
-            <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{props.employeeDetails.filter(function(e){return e.active;}).length} active employees</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{(props.employeeDetails||[]).filter(function(e){return e.active;}).length} active employees</div>
           </div>
           <div className="row-between" style={{marginBottom:10}}>
-            <div style={{fontSize:12,color:"var(--muted)"}}>{props.employeeDetails.length} employees</div>
+            <div style={{fontSize:12,color:"var(--muted)"}}>{(props.employeeDetails||[]).length} employees</div>
             {!props.readOnly && <button className="add-btn" onClick={function(){openAdd("employee");}}>＋ Add Employee</button>}
           </div>
           <div className="card">
-            {props.employeeDetails.map(function(e,i){
+            {(props.employeeDetails||[]).map(function(e,i){
               return (
                 <div key={e.id||i} className="info-row">
                   <div>
@@ -2362,31 +2362,32 @@ function ResidentPortal(props) {
           {/* OWNER EXTENDED TABS — uses directly loaded owner data */}
           {tab==="income" && isOwner && (
             <IncomeTab
-              otherIncome={ownerIncome} corpusData={ownerCorpus} fdData={ownerFD}
-              allPayments={ownerPayments} monthlySummaries={ownerMonthlySummary}
-              totalMaint={0} totalOtherInc={ownerIncome.filter(function(o){return o.source!=="Opening Bank Balance";}).reduce(function(s,o){return s+o.amount;},0)}
-              totalCorpus={ownerCorpus.reduce(function(s,c){return s+c.amount;},0)}
-              fdMatured={ownerFD.filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0)}
+              otherIncome={ownerIncome||[]} corpusData={ownerCorpus||[]} fdData={ownerFD||[]}
+              allPayments={ownerPayments||[]} monthlySummaries={ownerMonthlySummary||[]}
+              totalMaint={0}
+              totalOtherInc={(ownerIncome||[]).filter(function(o){return o.source!=="Opening Bank Balance";}).reduce(function(s,o){return s+o.amount;},0)}
+              totalCorpus={(ownerCorpus||[]).reduce(function(s,c){return s+c.amount;},0)}
+              fdMatured={(ownerFD||[]).filter(function(f){return f.status==="matured";}).reduce(function(s,f){return s+(f.matured_amount||0);},0)}
               selMonth={getCurrentMonth()} setSelMonth={function(){}}
               showToast={showToast} reload={function(){}} readOnly
             />
           )}
           {tab==="expenses" && isOwner && (
             <ExpensesTab
-              allExpenses={ownerExpenses}
-              monthExp={ownerExpenses.filter(function(e){var bm=e.billing_month||(e.expense_date?e.expense_date.slice(0,7):null);return bm===ownerSelMonth;})}
+              allExpenses={ownerExpenses||[]}
+              monthExp={(ownerExpenses||[]).filter(function(e){var bm=e.billing_month||(e.expense_date?e.expense_date.slice(0,7):null);return bm===ownerSelMonth;})}
               selMonth={ownerSelMonth} setSelMonth={setOwnerSelMonth}
               showToast={showToast} reload={function(){}} readOnly
             />
           )}
           {tab==="reports" && isOwner && (
             <ReportsTab
-              allExpenses={ownerExpenses} otherIncome={ownerIncome}
-              corpusData={ownerCorpus} fdData={ownerFD} allPayments={ownerPayments}
-              monthlySummaries={ownerMonthlySummary} overdueBills={ownerOverdue}
-              flats={(sp||{}).flats||[]} maintenanceSlabs={resSlabs}
-              ebDetails={ownerEB} employeeDetails={ownerStaff} aptInfo={resAptInfo}
-              acctSettings={(sp||{}).acctSettings||{}} selMonth={getCurrentMonth()}
+              allExpenses={ownerExpenses||[]} otherIncome={ownerIncome||[]}
+              corpusData={ownerCorpus||[]} fdData={ownerFD||[]} allPayments={ownerPayments||[]}
+              monthlySummaries={ownerMonthlySummary||[]} overdueBills={ownerOverdue||[]}
+              flats={[]} maintenanceSlabs={resSlabs||[]}
+              ebDetails={ownerEB||[]} employeeDetails={ownerStaff||[]} aptInfo={resAptInfo||{}}
+              acctSettings={{}} selMonth={getCurrentMonth()}
             />
           )}
           {tab==="approvals" && isOwner && (
@@ -3232,7 +3233,7 @@ function ReportsTab(props) {
         onBack={function(){setActiveReport(null);setReportData(null);}}
         onPrint={printReport}
         flatsList={ALL_FLATS_LIST}
-        flats={props.flats}
+        flats={(props.flats||[])}
         aptInfo={props.aptInfo}
       />
     );
@@ -3584,7 +3585,7 @@ function ReportViewer(props) {
           {Header("Corpus Fund Register","All 30 flats")}
           {(function(){
             var paidFlats = (d.rows||[]).map(function(r){return r.flat_id;});
-            var unpaid = props.flatsList.filter(function(f){return paidFlats.indexOf(f)===-1;});
+            var unpaid = (props.flatsList||[]).filter(function(f){return paidFlats.indexOf(f)===-1;});
             return (<>
               {Table(["Flat","Date Paid","Mode","Amount"],
                 (d.rows||[]).map(function(r){return <tr key={r.id}><td>{r.flat_id}</td><td>{r.paid_date||"—"}</td><td>{r.mode||"—"}</td><td>{fmtRupee(r.amount)}</td></tr>;})
@@ -3624,7 +3625,7 @@ function ReportViewer(props) {
           <div className="report-filter-row">
             <select className="form-input" value={props.filters.flatId} onChange={function(e){props.setFilters(function(p){return Object.assign({},p,{flatId:e.target.value});});}}>
               <option value="">Select Flat</option>
-              {props.flatsList.map(function(f){return <option key={f} value={f}>{f}</option>;})}
+              {(props.flatsList||[]).map(function(f){return <option key={f} value={f}>{f}</option>;})}
             </select>
             <button className="rep-apply-btn" onClick={props.onReload}>Load</button>
           </div>
