@@ -2756,22 +2756,53 @@ function ApprovalsTab(props) {
 
   async function approvePayment(sub){
     if(sub.status==="approved"){ props.showToast("ℹ️ Already approved"); return; }
-    var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month).single();
-    if(!dup.error && dup.data){
-      // Payment record exists — still ensure bill is paid and submission marked approved
-      await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
-      await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
+    try {
+      // Step 1: Update bill to paid
+      var billUpd = await supabase.from("bills")
+        .update({status:"paid",arrears:0})
+        .eq("flat_id",sub.flat_id)
+        .eq("billing_month",sub.billing_month);
+      if(billUpd.error) { props.showToast("❌ Bill update failed: "+billUpd.error.message); return; }
+
+      // Step 2: Check for existing payment record
+      var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
+      if(!dup.error && (!dup.data || dup.data.length===0)){
+        // No payment record — create one
+        var payIns = await supabase.from("payments").insert({
+          flat_id:sub.flat_id, billing_month:sub.billing_month,
+          amount_paid:sub.amount, mode:sub.mode, reference:sub.reference_no,
+          payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]
+        });
+        if(payIns.error) console.warn("Payment insert warning:", payIns.error.message);
+      }
+
+      // Step 3: Mark submission as approved
+      var subUpd = await supabase.from("payment_submissions")
+        .update({status:"approved", reviewed_at:new Date().toISOString()})
+        .eq("id",sub.id);
+      if(subUpd.error){ props.showToast("❌ Submission update failed: "+subUpd.error.message); return; }
+
+      // Step 4: Notify resident
+      if(sub.submitted_by){
+        await supabase.from("notifications").insert({
+          user_id:sub.submitted_by, type:"payment_approved",
+          title:"Payment Approved ✅",
+          body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",
+          data:{flat_id:sub.flat_id, billing_month:sub.billing_month}
+        });
+      }
+
       props.showToast("✅ Payment approved for Flat "+sub.flat_id);
-      setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
-      return;
+      // Update local state immediately
+      setPayments(function(prev){
+        return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; });
+      });
+      // Reload to confirm DB state (without resetting sec tab)
+      setTimeout(function(){ loadApprovals(); }, 500);
+    } catch(e) {
+      props.showToast("❌ Error: "+e.message);
+      console.error("approvePayment error:", e);
     }
-    // No existing payment — create one and update bill
-    await supabase.from("payments").insert({flat_id:sub.flat_id,billing_month:sub.billing_month,amount_paid:sub.amount,mode:sub.mode,reference:sub.reference_no,payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]});
-    await supabase.from("bills").update({status:"paid",arrears:0}).eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
-    await supabase.from("payment_submissions").update({status:"approved",reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
-    await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_approved",title:"Payment Approved ✅",body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" has been approved.",data:{flat_id:sub.flat_id,billing_month:sub.billing_month}});
-    props.showToast("✅ Payment approved for Flat "+sub.flat_id);
-    setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; }); });
   }
 
   async function rejectPayment(sub, reason){
