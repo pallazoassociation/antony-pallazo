@@ -2265,7 +2265,13 @@ function ResidentPortal(props) {
 
             <div style={{margin:"14px 16px 0"}}>
               <button className="btn btn-primary" onClick={function(){
-                setPayForm(function(p){return Object.assign({},p,{billing_month:getCurrentMonth()});});
+                // Get monthly charge from bills array (current or most recent bill)
+                var anyBill = bills.find(function(b){ return b.total_amount > 0; });
+                var flatCharge = anyBill ? anyBill.total_amount : "";
+                setPayForm(function(p){return Object.assign({},p,{
+                  billing_month:getCurrentMonth(),
+                  amount: String(flatCharge)
+                });});
                 setShowPayForm(true);
               }}>💸 Submit Payment</button>
             </div>
@@ -2464,7 +2470,11 @@ function ResidentPortal(props) {
                 {/* Payment type toggle */}
                 <div style={{display:"flex",gap:0,marginBottom:14,borderRadius:10,overflow:"hidden",border:"1.5px solid var(--border)"}}>
                   {[["single","📅 Current/Past"],["advance","⏩ Advance"]].map(function(x){
-                    return <button key={x[0]} onClick={function(){setPayForm(function(p){return Object.assign({},p,{payType:x[0],months:[],billing_month:getCurrentMonth()});});}}
+                    return <button key={x[0]} onClick={function(){
+                      var anyBill = bills.find(function(b){ return b.total_amount > 0; });
+                      var flatCharge = anyBill ? String(anyBill.total_amount) : "";
+                      setPayForm(function(p){return Object.assign({},p,{payType:x[0],months:[],billing_month:getCurrentMonth(),amount:p.amount||flatCharge});});
+                    }}
                       style={{flex:1,padding:"9px 6px",border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"'DM Sans',sans-serif",
                         background:payForm.payType===x[0]?"var(--gold)":"var(--card)",color:payForm.payType===x[0]?"#FFF":"var(--muted)"}}>
                       {x[1]}
@@ -2481,7 +2491,15 @@ function ResidentPortal(props) {
                     </select>
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                    <div className="form-group"><label className="form-label">Amount (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+                    <div className="form-group">
+                      <label className="form-label">Amount (₹) *</label>
+                      <input className="form-input" type="number" value={payForm.amount}
+                        onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/>
+                      {(function(){
+                        var anyBill = bills.find(function(b){ return b.total_amount > 0; });
+                        return anyBill ? <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Monthly charge: {fmtRupee(anyBill.total_amount)}</div> : null;
+                      })()}
+                    </div>
                     <div className="form-group"><label className="form-label">Mode *</label>
                       <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
                         {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
@@ -2528,7 +2546,15 @@ function ResidentPortal(props) {
                     <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>{(payForm.months||[]).slice().sort().map(monthLabel).join(", ")}</div>
                   </div>}
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                    <div className="form-group"><label className="form-label">Amount per Month (₹) *</label><input className="form-input" type="number" value={payForm.amount} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+                    <div className="form-group">
+                      <label className="form-label">Amount per Month (₹) *</label>
+                      <input className="form-input" type="number" value={payForm.amount}
+                        onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/>
+                      {(function(){
+                        var anyBill = bills.find(function(b){ return b.total_amount > 0; });
+                        return anyBill ? <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Monthly charge: {fmtRupee(anyBill.total_amount)}</div> : null;
+                      })()}
+                    </div>
                     <div className="form-group"><label className="form-label">Mode *</label>
                       <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});});}}>
                         {["UPI","NEFT","IMPS","Cash","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
