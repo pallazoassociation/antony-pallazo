@@ -1705,20 +1705,38 @@ function InfoTab(props) {
     setRecalcRunning(true);
     setRecalcResult(null);
     var endM = slab.end_month || new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0");
-    // Find all bills in this slab's period
     var {data:bills} = await supabase.from("bills").select("*,flats(bhk_type)")
       .gte("billing_month", slab.start_month).lte("billing_month", endM);
     if (!bills) { setRecalcRunning(false); return; }
+    // Also fetch actual payments to know what was really paid
+    var {data:actualPayments} = await supabase.from("payments").select("flat_id,billing_month,amount_paid");
+    var paidMap = {};
+    (actualPayments||[]).forEach(function(p){ paidMap[p.flat_id+"|"+p.billing_month] = p.amount_paid; });
     var changes = [];
     for (var i=0;i<bills.length;i++) {
       var b = bills[i];
       var bhk = b.flats?.bhk_type;
       if (!bhk) continue;
       var newCharge = bhk==="1BHK"?slab.charge_1bhk:bhk==="2BHK"?slab.charge_2bhk:slab.charge_3bhk;
-      if (newCharge !== b.total_amount) {
-        var diff = newCharge - b.total_amount;
-        var newArrears = b.status==="paid" ? Math.max(0,diff) : newCharge; // if paid and price went up, diff is owed
-        changes.push({flat_id:b.flat_id,billing_month:b.billing_month,old:b.total_amount,newAmt:newCharge,diff,status:b.status,newArrears});
+      if (newCharge === b.total_amount) continue; // no change needed
+      var diff = newCharge - b.total_amount;
+      var paidAmt = paidMap[b.flat_id+"|"+b.billing_month] || 0;
+      var newStatus, newArrears;
+      if (paidAmt >= newCharge) {
+        // Fully paid even at new price — mark as paid, no arrears
+        newStatus = "paid"; newArrears = 0;
+      } else if (paidAmt > 0) {
+        // Partially paid — owe the difference
+        newStatus = "overdue"; newArrears = newCharge - paidAmt;
+      } else {
+        // Not paid — overdue for full new amount
+        newStatus = "overdue"; newArrears = newCharge;
+      }
+      // Only include if something actually changes
+      if (newCharge !== b.total_amount || newStatus !== b.status || newArrears !== b.arrears) {
+        changes.push({flat_id:b.flat_id,billing_month:b.billing_month,
+          old:b.total_amount,newAmt:newCharge,diff,
+          oldStatus:b.status,newStatus,newArrears,paidAmt});
       }
     }
     setRecalcResult(changes);
@@ -1728,20 +1746,13 @@ function InfoTab(props) {
   async function applyRecalc(slab) {
     if (!recalcResult||recalcResult.length===0) return;
     setRecalcRunning(true);
-    var endM = slab.end_month || new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0");
     for (var i=0;i<recalcResult.length;i++) {
       var c = recalcResult[i];
-      // Update bill amount
-      var update = { total_amount: c.newAmt };
-      if (c.status==="paid" && c.diff>0) {
-        // Was paid but price went up — show difference as arrears/overdue
-        update.arrears = c.diff;
-        update.status = "overdue";
-      } else if (c.status==="overdue") {
-        update.arrears = c.newAmt;
-      }
-      await supabase.from("bills").update(update)
-        .eq("flat_id",c.flat_id).eq("billing_month",c.billing_month);
+      await supabase.from("bills").update({
+        total_amount: c.newAmt,
+        status: c.newStatus,
+        arrears: c.newArrears
+      }).eq("flat_id",c.flat_id).eq("billing_month",c.billing_month);
     }
     props.showToast("✅ Bills recalculated — "+recalcResult.length+" bills updated");
     setRecalcResult(null);
@@ -1828,9 +1839,9 @@ function InfoTab(props) {
                           {recalcResult.map(function(c){
                             return <div key={c.flat_id+c.billing_month} style={{display:"flex",justifyContent:"space-between",padding:"6px 10px",borderBottom:"1px solid var(--border)",fontSize:12}}>
                               <span>Flat {c.flat_id} · {monthLabel(c.billing_month)}</span>
-                              <span style={{color:c.diff>0?"var(--red)":"var(--green)",fontWeight:600}}>
-                                ₹{c.old} → ₹{c.newAmt} ({c.diff>0?"+":""}{c.diff})
-                                {c.status==="paid"&&c.diff>0?" ⚠️ overdue":""}
+                              <span style={{color:c.newStatus==="paid"?"var(--green)":c.diff>0?"var(--red)":"var(--gold)",fontWeight:600}}>
+                                ₹{c.old}→₹{c.newAmt}
+                                {c.newStatus==="paid"?" ✅ stays paid":c.diff>0?" ⚠️ +₹"+c.diff+" owed":"  ✓ corrected"}
                               </span>
                             </div>;
                           })}
