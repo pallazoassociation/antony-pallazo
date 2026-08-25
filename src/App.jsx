@@ -1846,7 +1846,15 @@ function InfoTab(props) {
                             </div>;
                           })}
                         </div>
-                        <button onClick={function(){applyRecalc(s);}}
+                        <button onClick={function(){
+                          var paidCount = recalcResult.filter(function(c){return c.newStatus==="paid";}).length;
+                          var overdueCount = recalcResult.filter(function(c){return c.newStatus==="overdue";}).length;
+                          var msg = "You are about to update "+recalcResult.length+" bills:\n"+
+                            (paidCount>0?"• "+paidCount+" bills restored to PAID\n":"")+
+                            (overdueCount>0?"• "+overdueCount+" bills marked OVERDUE\n":"")+
+                            "\nThis cannot be undone. Continue?";
+                          if(window.confirm(msg)) applyRecalc(s);
+                        }}
                           style={{marginTop:8,width:"100%",border:"none",background:"var(--red)",color:"#FFF",borderRadius:8,padding:"10px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
                           ⚡ Apply — Update {recalcResult.length} Bills
                         </button>
