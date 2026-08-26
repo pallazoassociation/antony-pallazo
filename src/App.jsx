@@ -2935,6 +2935,23 @@ function ApprovalsTab(props) {
       {sec==="payments" && (
         <div style={{padding:"10px 16px 24px"}}>
           {/* Duplicate payment cleanup tool */}
+          <div style={{background:"#EEF2FF",border:"1.5px solid #818CF8",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#3730A3",marginBottom:6}}>🧪 Test DB Write Access</div>
+              <div style={{fontSize:11,color:"#3730A3",marginBottom:8}}>Verify Supabase UPDATE permissions are working.</div>
+              <button onClick={async function(){
+                var testVal = "test_"+Date.now();
+                var r = await supabase.from("account_settings").upsert({key:"_write_test",value:testVal});
+                if(r.error){ props.showToast("❌ DB write FAILED: "+r.error.message); }
+                else {
+                  var v = await supabase.from("account_settings").select("value").eq("key","_write_test").single();
+                  if(v.data && v.data.value===testVal){ props.showToast("✅ DB writes working correctly!"); }
+                  else { props.showToast("⚠️ Write silently failed - RLS may be blocking"); }
+                  await supabase.from("account_settings").delete().eq("key","_write_test");
+                }
+              }} style={{background:"#818CF8",color:"#FFF",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                🧪 Run Write Test
+              </button>
+            </div>
           <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
             <div style={{fontSize:12,fontWeight:700,color:"#7A5C00",marginBottom:6}}>🔧 Fix Duplicate Payments</div>
             <div style={{fontSize:11,color:"#7A5C00",marginBottom:8}}>If a flat has multiple payment records for the same month, remove duplicates keeping only the first entry.</div>
