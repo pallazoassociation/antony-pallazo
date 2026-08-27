@@ -3255,14 +3255,28 @@ function ReportsTab(props) {
     else if (reportId==="income_expenditure") {
       var fromDate = filters.fromMonth+"-01";
       var toDate   = monthEndDate(filters.toMonth);
-      var [pay, exp, oi, cp, fd] = await Promise.all([
-        supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth),
+      // Fetch payments in batches to bypass Supabase 1000-row limit
+      var allPayments = [];
+      var batchSize = 1000;
+      var offset = 0;
+      while(true) {
+        var batch = await supabase.from("payments").select("*")
+          .gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth)
+          .order("payment_date",{ascending:true})
+          .range(offset, offset+batchSize-1);
+        if(batch.data && batch.data.length>0) {
+          allPayments = allPayments.concat(batch.data);
+          if(batch.data.length < batchSize) break; // last batch
+          offset += batchSize;
+        } else break;
+      }
+      var [exp, oi, cp, fd] = await Promise.all([
         supabase.from("expenses").select("*").gte("expense_date",fromDate).lte("expense_date",toDate),
         supabase.from("other_income").select("*").gte("received_date",fromDate).lte("received_date",toDate),
         supabase.from("corpus_payments").select("*").gte("paid_date",fromDate).lte("paid_date",toDate),
         supabase.from("fixed_deposits").select("*").gte("matured_date",fromDate).lte("matured_date",toDate),
       ]);
-      data.payments = pay.data||[]; data.expenses = exp.data||[];
+      data.payments = allPayments; data.expenses = exp.data||[];
       data.otherIncome = oi.data||[]; data.corpus = cp.data||[]; data.fd = fd.data||[];
     }
     else if (reportId==="bank_balance") {
@@ -3299,8 +3313,15 @@ function ReportsTab(props) {
       data.rows = ov2.data || [];
     }
     else if (reportId==="payment_mode") {
-      var p2 = await supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth);
-      data.rows = p2.data || [];
+      var allPmRows = [];
+      var pmOff = 0;
+      while(true){
+        var pmBatch = await supabase.from("payments").select("*")
+          .gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth)
+          .range(pmOff, pmOff+999);
+        if(pmBatch.data&&pmBatch.data.length>0){allPmRows=allPmRows.concat(pmBatch.data);if(pmBatch.data.length<1000)break;pmOff+=1000;}else break;
+      }
+      data.rows = allPmRows;
     }
     else if (reportId==="advance_payment") {
       var bills2 = await supabase.from("bills").select("*").eq("status","paid").gt("billing_month",getCurrentMonth());
@@ -3309,7 +3330,7 @@ function ReportsTab(props) {
     else if (reportId==="agm_report") {
       var fyFrom = filters.fromMonth, fyTo = filters.toMonth;
       var [pay2, exp2, ov3, lb2] = await Promise.all([
-        supabase.from("payments").select("*").gte("billing_month",fyFrom).lte("billing_month",fyTo),
+        supabase.from("payments").select("*").gte("billing_month",fyFrom).lte("billing_month",fyTo).range(0,1999),
         supabase.from("expenses").select("*").gte("expense_date",fyFrom+"-01").lte("expense_date",monthEndDate(fyTo)),
         supabase.from("overdue_summary").select("*"),
         supabase.from("live_bank_balance").select("*").single(),
