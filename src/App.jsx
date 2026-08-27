@@ -2823,30 +2823,42 @@ function ApprovalsTab(props) {
   async function approvePayment(sub){
     if(sub.status==="approved"){ props.showToast("ℹ️ Already approved"); return; }
     try {
+      console.log("[approve] starting:", sub.flat_id, sub.billing_month, "sub.id:", sub.id);
+
       // Step 1: Update bill to paid
       var billUpd = await supabase.from("bills")
         .update({status:"paid",arrears:0})
         .eq("flat_id",sub.flat_id)
         .eq("billing_month",sub.billing_month);
-      if(billUpd.error) { props.showToast("❌ Bill update failed: "+billUpd.error.message); return; }
+      console.log("[approve] bill update:", billUpd.error?"ERR:"+billUpd.error.message:"OK");
+      if(billUpd.error){ props.showToast("❌ Bill update failed: "+billUpd.error.message); return; }
 
       // Step 2: Check for existing payment record
       var dup = await supabase.from("payments").select("id").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month);
+      console.log("[approve] dup check:", dup.data?.length, "records");
       if(!dup.error && (!dup.data || dup.data.length===0)){
-        // No payment record — create one
         var payIns = await supabase.from("payments").insert({
           flat_id:sub.flat_id, billing_month:sub.billing_month,
           amount_paid:sub.amount, mode:sub.mode, reference:sub.reference_no,
           payment_date:sub.transaction_date||new Date().toISOString().split("T")[0]
         });
-        if(payIns.error) console.warn("Payment insert warning:", payIns.error.message);
+        console.log("[approve] payment insert:", payIns.error?"ERR:"+payIns.error.message:"OK");
       }
 
       // Step 3: Mark submission as approved
       var subUpd = await supabase.from("payment_submissions")
         .update({status:"approved", reviewed_at:new Date().toISOString()})
         .eq("id",sub.id);
+      console.log("[approve] submission update:", subUpd.error?"ERR:"+subUpd.error.message:"OK");
       if(subUpd.error){ props.showToast("❌ Submission update failed: "+subUpd.error.message); return; }
+
+      // Step 3b: Verify the update actually persisted
+      var verify = await supabase.from("payment_submissions").select("status").eq("id",sub.id).single();
+      console.log("[approve] verify status:", verify.data?.status);
+      if(verify.data?.status !== "approved"){
+        props.showToast("⚠️ DB did not persist! Status is still: "+verify.data?.status+" — check console");
+        return;
+      }
 
       // Step 4: Notify resident
       if(sub.submitted_by){
@@ -2859,15 +2871,13 @@ function ApprovalsTab(props) {
       }
 
       props.showToast("✅ Payment approved for Flat "+sub.flat_id);
-      // Update local state immediately
       setPayments(function(prev){
         return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"approved"}) : p; });
       });
-      // Reload to confirm DB state (without resetting sec tab)
       setTimeout(function(){ loadApprovals(); }, 500);
     } catch(e) {
       props.showToast("❌ Error: "+e.message);
-      console.error("approvePayment error:", e);
+      console.error("[approve] exception:", e);
     }
   }
 
