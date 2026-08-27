@@ -1198,21 +1198,99 @@ function FlatsTab(props) {
 
 function OverdueTab(props) {
   var [view, setView] = useState("flat");
+  var [payingMonth, setPayingMonth] = useState(null); // {flat_id, flat_no, month, amount, bhk}
+  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0]});
+  var [saving, setSaving] = useState(false);
 
-  // Natural sort: A1, A2...A6, B1...F4
+  // Natural sort
   var FLAT_ORDER = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6",
     "C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
-  var overdueFlats = props.flats
+  var overdueFlats = (props.flats||[])
     .filter(function(f){ return props.overdueByFlat[f.id] && props.overdueByFlat[f.id].length > 0; })
-    .sort(function(a,b){
-      return FLAT_ORDER.indexOf(a.id) - FLAT_ORDER.indexOf(b.id);
-    });
+    .sort(function(a,b){ return FLAT_ORDER.indexOf(a.id) - FLAT_ORDER.indexOf(b.id); });
 
   var totalMonths = Object.values(props.overdueByFlat).reduce(function(s,arr){return s+arr.length;},0);
 
+  async function markPaid() {
+    if(!payForm.payDate){ props.showToast("⚠️ Enter payment date"); return; }
+    var amt = parseInt(payForm.amount);
+    if(!amt||amt<=0){ props.showToast("⚠️ Enter valid amount"); return; }
+    setSaving(true);
+    try {
+      // Check if payment already exists
+      var dup = await supabase.from("payments").select("id").eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
+      if(!dup.error && dup.data && dup.data.length>0){
+        // Update existing payment
+        await supabase.from("payments").update({amount_paid:amt,mode:payForm.mode,reference:payForm.ref,payment_date:payForm.payDate})
+          .eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
+      } else {
+        // Insert new payment
+        await supabase.from("payments").insert({flat_id:payingMonth.flat_id,billing_month:payingMonth.month,
+          amount_paid:amt,mode:payForm.mode,reference:payForm.ref||null,payment_date:payForm.payDate});
+      }
+      // Update bill
+      var isFullPaid = amt >= payingMonth.amount;
+      await supabase.from("bills").update({
+        status: isFullPaid ? "paid" : "overdue",
+        arrears: isFullPaid ? 0 : payingMonth.amount - amt
+      }).eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
+      props.showToast("✅ Payment recorded for Flat "+payingMonth.flat_no+" — "+monthLabel(payingMonth.month));
+      setPayingMonth(null);
+      await props.reload();
+    } catch(e) {
+      props.showToast("❌ "+e.message);
+    }
+    setSaving(false);
+  }
+
   return (
     <>
+      {/* ── Inline Pay Sheet ── */}
+      {payingMonth && (
+        <div className="overlay" onClick={function(){setPayingMonth(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-head">
+              <div>
+                <div className="sheet-title">Record Payment</div>
+                <div className="sheet-sub">Flat {payingMonth.flat_no} · {monthLabel(payingMonth.month)} · Overdue {fmtRupee(payingMonth.amount)}</div>
+              </div>
+              <button className="close-btn" onClick={function(){setPayingMonth(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div className="form-group">
+                <label className="form-label">Amount (₹) *</label>
+                <input className="form-input" type="number" value={payForm.amount}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Overdue amount: {fmtRupee(payingMonth.amount)}</div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div className="form-group">
+                  <label className="form-label">Mode *</label>
+                  <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});})}}>
+                    {["Cash","UPI","NEFT","IMPS","Cheque","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Payment Date *</label>
+                  <input className="form-input" type="date" value={payForm.payDate} max={new Date().toISOString().split("T")[0]}
+                    onChange={function(e){setPayForm(function(p){return Object.assign({},p,{payDate:e.target.value});})}}/>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Reference / Transaction ID</label>
+                <input className="form-input" placeholder="UPI ref, cheque no etc." value={payForm.ref}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{ref:e.target.value});})}}/>
+              </div>
+              <button className="btn btn-success" onClick={markPaid} disabled={saving}>
+                {saving?<span className="spinner"/>:"✓ Record Payment"}
+              </button>
+              <button className="btn btn-secondary mt10" onClick={function(){setPayingMonth(null);}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{padding:"14px 16px 8px"}}>
         <div style={{background:"linear-gradient(135deg,#C0392B,#E05B4E)",borderRadius:14,padding:"14px 16px"}}>
           <div style={{color:"rgba(255,255,255,.6)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Total All-Time Outstanding Dues</div>
@@ -1236,7 +1314,7 @@ function OverdueTab(props) {
               var tot = months.reduce(function(s,x){return s+x.amount;},0);
               return (
                 <div key={f.id} style={{borderBottom:"1px solid var(--border)"}}>
-                  <div className="flat-item" onClick={function(){props.setSelFlat(f);}} style={{borderBottom:"none"}}>
+                  <div className="flat-item" style={{borderBottom:"none"}}>
                     <div className="fi-left">
                       <div className="fi-avatar overdue">{f.flat_no}</div>
                       <div>
@@ -1249,14 +1327,97 @@ function OverdueTab(props) {
                       <div className="chip overdue">{months.length} Month{months.length>1?"s":""}</div>
                     </div>
                   </div>
-                  <div style={{padding:"0 16px 10px"}}>
+                  <div style={{padding:"0 12px 10px"}}>
                     {months.slice().sort(function(a,b){return a.month.localeCompare(b.month);}).map(function(m){
-                      return <div key={m.month} className="overdue-month-row"><span style={{color:"var(--muted)"}}>{monthLabel(m.month)}</span><span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(m.amount)}</span></div>;
+                      return (
+                        <div key={m.month} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 4px",borderTop:"1px solid var(--border)"}}>
+                          <span style={{color:"var(--muted)",fontSize:13}}>{monthLabel(m.month)}</span>
+                          <div style={{display:"flex",alignItems:"center",gap:10}}>
+                            <span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(m.amount)}</span>
+                            <button onClick={function(){
+                              setPayForm({amount:String(m.amount),mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0]});
+                              setPayingMonth({flat_id:f.id,flat_no:f.flat_no,month:m.month,amount:m.amount,bhk:f.bhk_type});
+                            }} style={{background:"var(--green)",color:"#FFF",border:"none",borderRadius:8,padding:"4px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                              ✓ Pay
+                            </button>
+                          </div>
+                        </div>
+                      );
                     })}
                   </div>
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {view==="year" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div className="card">
+            {Object.keys(props.overdueByYear).sort().reverse().map(function(yr){
+              var yd = props.overdueByYear[yr];
+              return (
+                <div key={yr} style={{borderBottom:"1px solid var(--border)"}}>
+                  <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div><div style={{fontSize:15,fontWeight:700}}>Year {yr}</div><div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{Object.keys(yd.flats).length} flats overdue</div></div>
+                    <div style={{fontSize:16,fontWeight:700,color:"var(--red)"}}>{fmtRupee(yd.total)}</div>
+                  </div>
+                  <div style={{padding:"0 16px 10px"}}>
+                    {Object.keys(yd.flats).sort(function(a,b){ return FLAT_ORDER.indexOf(a)-FLAT_ORDER.indexOf(b); }).map(function(flat){
+                      return <div key={flat} className="overdue-month-row"><span>Flat {flat}</span><span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(yd.flats[flat])}</span></div>;
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {view==="month" && (
+        <div style={{padding:"10px 16px 24px"}}>
+          <div className="card">
+            {(function(){
+              var byMonth = {};
+              Object.keys(props.overdueByFlat).forEach(function(flat){
+                (props.overdueByFlat[flat]||[]).forEach(function(item){
+                  if (!byMonth[item.month]) byMonth[item.month] = {total:0,flats:[]};
+                  byMonth[item.month].total += item.amount;
+                  byMonth[item.month].flats.push({flat:flat, amount:item.amount});
+                });
+              });
+              return Object.keys(byMonth).sort().reverse().map(function(m){
+                var md = byMonth[m];
+                return (
+                  <div key={m} style={{borderBottom:"1px solid var(--border)"}}>
+                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontSize:15,fontWeight:700}}>{monthLabel(m)}</div><div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{md.flats.length} flat{md.flats.length>1?"s":""} overdue</div></div>
+                      <div style={{fontSize:16,fontWeight:700,color:"var(--red)"}}>{fmtRupee(md.total)}</div>
+                    </div>
+                    <div style={{padding:"0 12px 10px"}}>
+                      {md.flats.map(function(x){
+                        var flatObj = (props.flats||[]).find(function(f){return f.id===x.flat;});
+                        return (
+                          <div key={x.flat} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 4px",borderTop:"1px solid var(--border)"}}>
+                            <span>Flat {x.flat}</span>
+                            <div style={{display:"flex",alignItems:"center",gap:10}}>
+                              <span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(x.amount)}</span>
+                              <button onClick={function(){
+                                setPayForm({amount:String(x.amount),mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0]});
+                                setPayingMonth({flat_id:x.flat,flat_no:x.flat,month:m,amount:x.amount,bhk:flatObj?.bhk_type||""});
+                              }} style={{background:"var(--green)",color:"#FFF",border:"none",borderRadius:8,padding:"4px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                                ✓ Pay
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
       )}
