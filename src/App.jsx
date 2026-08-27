@@ -390,7 +390,7 @@ export default function App() {
         supabase.from("corpus_payments").select("*").order("paid_date",{ascending:false}),              // 6
         supabase.from("fixed_deposits").select("*").order("invested_date",{ascending:false}),           // 7
         supabase.from("account_settings").select("*"),                                                   // 8
-        supabase.from("payments").select("flat_id,billing_month,amount_paid,payment_date").order("payment_date",{ascending:false}).limit(500), // 9
+        supabase.from("payments").select("flat_id,billing_month,amount_paid,mode,reference,payment_date").order("payment_date",{ascending:false}), // 9
       ]);
       if (results[0].data)  setFlats(results[0].data);
       if (results[1].data)  setMonthlySummaries(results[1].data);
@@ -762,15 +762,14 @@ export default function App() {
                 <button className="btn btn-primary" onClick={function(){setPayModal(true);}}>💸 Record Payment</button>
 
                 {getStatusForFlat(selFlat.id) === "paid" ? (
-                  /* Already paid — show Revert to Unpaid option */
+                  <>
+                  {/* Already paid — show Revert and Edit options */}
                   <button className="btn btn-secondary" style={{borderColor:"var(--red)",color:"var(--red)"}}
                     onClick={async function(){
                       if (!window.confirm("Revert Flat "+selFlat.flat_no+" to UNPAID for "+monthLabel(selMonth)+"?\n\nThis will:\n• Mark bill as overdue\n• Delete the payment record for this month")) return;
-                      // Mark bill as overdue
                       await supabase.from("bills")
                         .update({status:"overdue", arrears:selFlat.monthly_charge})
                         .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
-                      // Delete payment record for this month
                       await supabase.from("payments")
                         .delete()
                         .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
@@ -779,10 +778,32 @@ export default function App() {
                       await loadMonthData(selMonth);
                       await loadData();
                     }}>↩️ Revert Unpaid</button>
+                  <button className="btn btn-secondary" style={{borderColor:"var(--gold)",color:"var(--gold)"}}
+                    onClick={async function(){
+                      var {data:existPay} = await supabase.from("payments").select("*")
+                        .eq("flat_id",selFlat.id).eq("billing_month",selMonth).single();
+                      if(!existPay){ showToast("No payment record found"); return; }
+                      var newAmt = window.prompt("Edit payment amount for "+selFlat.flat_no+" "+monthLabel(selMonth)+":\nCurrent: ₹"+existPay.amount_paid, existPay.amount_paid);
+                      if(!newAmt) return;
+                      var amt = parseInt(newAmt);
+                      if(isNaN(amt)||amt<=0){ showToast("Invalid amount"); return; }
+                      await supabase.from("payments").update({amount_paid:amt}).eq("id",existPay.id);
+                      // If amount >= monthly charge, mark as paid; otherwise overdue for diff
+                      if(amt >= selFlat.monthly_charge){
+                        await supabase.from("bills").update({status:"paid",arrears:0})
+                          .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                      } else {
+                        await supabase.from("bills").update({status:"overdue",arrears:selFlat.monthly_charge-amt})
+                          .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
+                      }
+                      showToast("✅ Payment updated to ₹"+amt);
+                      await loadMonthData(selMonth);
+                      await loadData();
+                    }}>✏️ Edit Amount</button>
+                  </>
                 ) : (
                   /* Not paid — show Mark Paid */
                   <button className="btn btn-success" onClick={function(){
-                    // Open pay modal pre-filled for quick mark paid
                     setPayForm({
                       amount:String(selFlat.monthly_charge),
                       mode:"Cash",
