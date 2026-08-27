@@ -2845,10 +2845,12 @@ function ApprovalsTab(props) {
         console.log("[approve] payment insert:", payIns.error?"ERR:"+payIns.error.message:"OK");
       }
 
-      // Step 3: Mark submission as approved
+      // Step 3: Mark ALL submissions for this flat+month as approved (handles duplicates)
       var subUpd = await supabase.from("payment_submissions")
         .update({status:"approved", reviewed_at:new Date().toISOString()})
-        .eq("id",sub.id);
+        .eq("flat_id",sub.flat_id)
+        .eq("billing_month",sub.billing_month)
+        .eq("status","pending");
       console.log("[approve] submission update:", subUpd.error?"ERR:"+subUpd.error.message:"OK");
       if(subUpd.error){ props.showToast("❌ Submission update failed: "+subUpd.error.message); return; }
 
