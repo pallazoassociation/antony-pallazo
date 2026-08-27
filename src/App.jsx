@@ -696,10 +696,11 @@ export default function App() {
         <div style={{display:tab==="reports"?"block":"none"}}><ReportsTab {...sharedProps}/></div>
         <div style={{display:tab==="info"?"block":"none"}}><InfoTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData}/></div>
+        <div style={{display:tab==="notices"?"block":"none"}}><NoticesTab notices={notices} showToast={showToast} reload={loadData}/></div>
       </div>
 
       <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"notices",icon:"📢",label:"Notices"}].map(function(t){
           return (
             <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:64,flexShrink:0}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
@@ -1198,9 +1199,10 @@ function FlatsTab(props) {
 
 function OverdueTab(props) {
   var [view, setView] = useState("flat");
-  var [payingMonth, setPayingMonth] = useState(null); // {flat_id, flat_no, month, amount, bhk}
+  var [payingMonth, setPayingMonth] = useState(null);
   var [payForm, setPayForm] = useState({amount:"",mode:"Cash",ref:"",payDate:new Date().toISOString().split("T")[0]});
   var [saving, setSaving] = useState(false);
+  var [waMsg, setWaMsg] = useState(null); // WhatsApp reminder sheet
 
   // Natural sort
   var FLAT_ORDER = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6",
@@ -1246,7 +1248,27 @@ function OverdueTab(props) {
 
   return (
     <>
-      {/* ── Inline Pay Sheet ── */}
+      {/* ── WhatsApp Reminder Sheet ── */}
+      {waMsg && (
+        <div className="overlay" onClick={function(){setWaMsg(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-head">
+              <div><div className="sheet-title">📱 WhatsApp Reminder</div><div className="sheet-sub">Flat {waMsg.flat_no} · {waMsg.months.length} month(s) overdue</div></div>
+              <button className="close-btn" onClick={function(){setWaMsg(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div style={{background:"#E8F5EE",borderRadius:10,padding:"12px 14px",marginBottom:14,fontSize:12,color:"#1a7a3a",lineHeight:1.6,whiteSpace:"pre-wrap",fontFamily:"monospace"}}>{waMsg.text}</div>
+              <a href={"https://wa.me/91"+waMsg.phone+"?text="+encodeURIComponent(waMsg.text)} target="_blank" rel="noreferrer"
+                style={{display:"block",background:"#25D366",color:"#FFF",textAlign:"center",padding:"12px",borderRadius:10,fontWeight:700,fontSize:14,textDecoration:"none",marginBottom:10}}>
+                📲 Open in WhatsApp
+              </a>
+              <button className="btn btn-secondary" onClick={function(){
+                navigator.clipboard.writeText(waMsg.text).then(function(){props.showToast("✅ Message copied!");});
+              }}>📋 Copy Message</button>
+            </div>
+          </div>
+        </div>
+      )}
       {payingMonth && (
         <div className="overlay" onClick={function(){setPayingMonth(null);}}>
           <div className="sheet" onClick={function(e){e.stopPropagation();}}>
@@ -1322,9 +1344,40 @@ function OverdueTab(props) {
                         <div className="fi-meta">{months.length} month{months.length>1?"s":""} unpaid · Block {f.block}</div>
                       </div>
                     </div>
-                    <div className="fi-right">
+                    <div className="fi-right" style={{flexDirection:"column",alignItems:"flex-end",gap:6}}>
                       <div className="fi-amount overdue">{fmtRupee(tot)}</div>
-                      <div className="chip overdue">{months.length} Month{months.length>1?"s":""}</div>
+                      <div style={{display:"flex",gap:6}}>
+                        <div className="chip overdue">{months.length} Month{months.length>1?"s":""}</div>
+                        <button onClick={function(){
+                          var ai = props.aptInfo||{};
+                          var sortedMonths = months.slice().sort(function(a,b){return a.month.localeCompare(b.month);});
+                          var monthList = sortedMonths.map(function(m){return "• "+monthLabel(m.month)+" — "+fmtRupee(m.amount);}).join("\n");
+                          var totalDue = months.reduce(function(s,m){return s+m.amount;},0);
+                          var msg = [
+                            "Dear Flat "+f.flat_no+" Owner,",
+                            "",
+                            "This is a friendly reminder from Antony Pallazo Apartment Association.",
+                            "",
+                            "📌 Outstanding Maintenance Dues:",
+                            monthList,
+                            "Total Due: "+fmtRupee(totalDue),
+                            "",
+                            "🏦 Antony Pallazo Bank Details:",
+                            "Account Name: "+(ai.acc_name||"PALLAZO APARTMENT RESIDENTS WELFARE ASSOCIATION"),
+                            "Account No: "+(ai.acc_no||"270201000458"),
+                            "Bank: "+(ai.bank_name||"ICICI BANK LTD")+" | Branch: "+(ai.branch||"KOVILAMBAKKAM"),
+                            "IFSC: "+(ai.ifsc||"ICIC0002702"),
+                            "UPI: "+(ai.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"),
+                            "",
+                            "Please make the payment at the earliest and share the screenshot for confirmation.",
+                            "Thank you! 🙏"
+                          ].join("\n");
+                          var phone = f.owner_phone||f.phone||"";
+                          setWaMsg({flat_no:f.flat_no, months:months, text:msg, phone:phone});
+                        }} style={{background:"#25D366",color:"#FFF",border:"none",borderRadius:6,padding:"3px 8px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                          📱 WA
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div style={{padding:"0 12px 10px"}}>
@@ -2450,9 +2503,23 @@ function ResidentPortal(props) {
               <div className="card">
                 {payments.map(function(p,i){
                   return <div key={p.id||i} style={{padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
-                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(p.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.mode} · {p.payment_date}</div></div>
-                      <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:"var(--green)"}}>{fmtRupee(p.amount_paid)}</div><div className="chip paid">Paid</div></div>
+                      <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+                        <div style={{fontWeight:700,color:"var(--green)"}}>{fmtRupee(p.amount_paid)}</div>
+                        <div className="chip paid">Paid</div>
+                        <button onClick={function(){
+                          var ai = resAptInfo||{};
+                          var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt</title><style>body{font-family:Arial,sans-serif;max-width:500px;margin:40px auto;padding:20px;color:#333}.header{text-align:center;border-bottom:2px solid #1A1410;padding-bottom:16px;margin-bottom:20px}h1{margin:0;font-size:22px;color:#1A1410}h2{margin:4px 0;font-size:13px;color:#666;font-weight:normal}.stamp{background:#E8F5EE;color:#2D6A4F;border:2px solid #2D6A4F;border-radius:8px;padding:8px 16px;display:inline-block;font-weight:bold;font-size:18px;margin:16px 0}.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}.label{color:#666;font-size:13px}.value{font-weight:600;font-size:13px}.total{font-size:16px;font-weight:bold;color:#1A1410}.footer{text-align:center;margin-top:20px;color:#999;font-size:11px}</style></head><body><div class="header"><h1>Antony Pallazo</h1><h2>'+(ai.address||"Gangai Amman Kovil Street, Medavakkam, Chennai-600100")+'</h2><div class="stamp">✓ PAYMENT RECEIPT</div></div><div class="row"><span class="label">Flat No</span><span class="value">'+flatId+'</span></div><div class="row"><span class="label">Resident</span><span class="value">'+(props.profile.name||"")+'</span></div><div class="row"><span class="label">For Month</span><span class="value">'+monthLabel(p.billing_month)+'</span></div><div class="row"><span class="label">Payment Date</span><span class="value">'+(p.payment_date||"")+'</span></div><div class="row"><span class="label">Mode</span><span class="value">'+(p.mode||"")+'</span></div>'+(p.reference?'<div class="row"><span class="label">Reference</span><span class="value">'+(p.reference||p.ref||"")+'</span></div>':'')+'<div class="row"><span class="label total">Amount Paid</span><span class="value total">₹'+Number(p.amount_paid).toLocaleString("en-IN")+'</span></div><div class="footer">This is a computer-generated receipt.<br>Antony Pallazo Apartment Residents Welfare Association</div></body></html>';
+                          var blob = new Blob([html], {type:"text/html"});
+                          var a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = "Receipt_"+flatId+"_"+p.billing_month+".html";
+                          a.click();
+                        }} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,padding:"2px 8px",fontSize:10,color:"var(--muted)",cursor:"pointer"}}>
+                          ⬇ Receipt
+                        </button>
+                      </div>
                     </div>
                   </div>;
                 })}
@@ -4113,6 +4180,107 @@ function TenantInfoTab(props) {
             <div key={row[0]} className="info-row" style={{flexWrap:"wrap",gap:4}}>
               <span className="ir-label" style={{flexShrink:0,minWidth:110}}>{row[0]}</span>
               <span className="ir-value" style={{wordBreak:"break-all",fontFamily:row[0]==="Account Number"||row[0]==="IFSC Code"?"monospace":"inherit"}}>{row[1]}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── NoticesTab — Admin posts notices, visible to all residents ─────────────
+function NoticesTab(props) {
+  var [showForm, setShowForm] = useState(false);
+  var [form, setForm] = useState({title:"",body:"",type:"general"});
+  var [saving, setSaving] = useState(false);
+
+  var TYPES = {general:"📢 General",maintenance:"🔧 Maintenance",water:"💧 Water",power:"⚡ Power Outage",event:"🎉 Event",urgent:"🚨 Urgent"};
+
+  async function postNotice() {
+    if(!form.title.trim()||!form.body.trim()){props.showToast("⚠️ Fill title and message"); return;}
+    setSaving(true);
+    // Insert notice into notices table
+    var res = await supabase.from("notices").insert({
+      title:form.title.trim(), body:form.body.trim(),
+      type:form.type, posted_at:new Date().toISOString(),
+      is_active:true
+    });
+    if(res.error){props.showToast("❌ "+res.error.message); setSaving(false); return;}
+    // Also push notification to all resident_users
+    var {data:residents} = await supabase.from("resident_users").select("id").eq("status","active");
+    if(residents && residents.length>0){
+      var notifs = residents.map(function(r){
+        return {user_id:r.id, type:"notice", title:TYPES[form.type]+" "+form.title.trim(), body:form.body.trim(), data:{notice_type:form.type}};
+      });
+      await supabase.from("notifications").insert(notifs);
+    }
+    props.showToast("✅ Notice posted to all residents!");
+    setForm({title:"",body:"",type:"general"});
+    setShowForm(false);
+    setSaving(false);
+    await props.reload();
+  }
+
+  async function deleteNotice(id) {
+    if(!window.confirm("Delete this notice?")) return;
+    await supabase.from("notices").delete().eq("id",id);
+    props.showToast("Notice deleted");
+    await props.reload();
+  }
+
+  return (
+    <div style={{padding:"14px 16px 24px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Notice Board</div>
+        <button className="add-btn" onClick={function(){setShowForm(true);}}>＋ Post Notice</button>
+      </div>
+
+      {showForm && (
+        <div className="card" style={{marginBottom:16,padding:"16px"}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>📢 New Notice</div>
+          <div className="form-group">
+            <label className="form-label">Type</label>
+            <select className="form-input" value={form.type} onChange={function(e){setForm(function(p){return Object.assign({},p,{type:e.target.value});})}}>
+              {Object.entries(TYPES).map(function(x){return <option key={x[0]} value={x[0]}>{x[1]}</option>;})}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Title *</label>
+            <input className="form-input" placeholder="e.g. Water supply disruption" value={form.title}
+              onChange={function(e){setForm(function(p){return Object.assign({},p,{title:e.target.value});})}}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Message *</label>
+            <textarea className="form-input" rows={4} placeholder="Full notice details..." value={form.body}
+              onChange={function(e){setForm(function(p){return Object.assign({},p,{body:e.target.value});})}}
+              style={{resize:"vertical"}}/>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button className="btn btn-success" onClick={postNotice} disabled={saving} style={{flex:1}}>
+              {saving?<span className="spinner"/>:"📢 Post to All Residents"}
+            </button>
+            <button className="btn btn-secondary" onClick={function(){setShowForm(false);}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        {(props.notices||[]).length===0 && <div className="empty"><div className="empty-icon">📢</div><div>No notices posted yet</div></div>}
+        {(props.notices||[]).map(function(n){
+          return (
+            <div key={n.id} style={{padding:"14px 16px",borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <span style={{fontSize:11,background:"var(--bg)",borderRadius:6,padding:"2px 8px",fontWeight:600,color:"var(--muted)"}}>{TYPES[n.type]||n.type}</span>
+                    <span style={{fontSize:10,color:"var(--muted)"}}>{n.posted_at?.slice(0,16).replace("T"," ")}</span>
+                  </div>
+                  <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{n.title}</div>
+                  <div style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>{n.body}</div>
+                </div>
+                <button onClick={function(){deleteNotice(n.id);}}
+                  style={{border:"none",background:"none",color:"var(--red)",cursor:"pointer",fontSize:16,flexShrink:0}}>🗑</button>
+              </div>
             </div>
           );
         })}
