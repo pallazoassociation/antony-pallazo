@@ -690,7 +690,7 @@ export default function App() {
       <div className="content">
         <div style={{display:tab==="home"?"block":"none"}}><HomeTab {...sharedProps}/></div>
         <div style={{display:tab==="flats"?"block":"none"}}><FlatsTab {...sharedProps}/></div>
-        <div style={{display:tab==="overdue"?"block":"none"}}><OverdueTab {...sharedProps}/></div>
+        <div style={{display:tab==="overdue"?"block":"none"}}><OverdueTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="income"?"block":"none"}}><IncomeTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="expenses"?"block":"none"}}><ExpensesTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="reports"?"block":"none"}}><ReportsTab {...sharedProps}/></div>
@@ -1412,62 +1412,6 @@ function OverdueTab(props) {
                             </div>
                           </div>
                         );
-                      })}
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </div>
-      )}
-
-      {view==="year" && (
-        <div style={{padding:"10px 16px 24px"}}>
-          <div className="card">
-            {Object.keys(props.overdueByYear).sort().reverse().map(function(yr){
-              var yd = props.overdueByYear[yr];
-              return (
-                <div key={yr} style={{borderBottom:"1px solid var(--border)"}}>
-                  <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div><div style={{fontSize:15,fontWeight:700}}>Year {yr}</div><div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{Object.keys(yd.flats).length} flats overdue</div></div>
-                    <div style={{fontSize:16,fontWeight:700,color:"var(--red)"}}>{fmtRupee(yd.total)}</div>
-                  </div>
-                  <div style={{padding:"0 16px 10px"}}>
-                    {Object.keys(yd.flats).sort(function(a,b){ return FLAT_ORDER.indexOf(a)-FLAT_ORDER.indexOf(b); }).map(function(flat){
-                      return <div key={flat} className="overdue-month-row"><span>Flat {flat}</span><span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(yd.flats[flat])}</span></div>;
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {view==="month" && (
-        <div style={{padding:"10px 16px 24px"}}>
-          <div className="card">
-            {(function(){
-              var byMonth = {};
-              Object.keys(props.overdueByFlat).forEach(function(flat){
-                props.overdueByFlat[flat].forEach(function(item){
-                  if (!byMonth[item.month]) byMonth[item.month] = {total:0,flats:[]};
-                  byMonth[item.month].total += item.amount;
-                  byMonth[item.month].flats.push({flat:flat, amount:item.amount});
-                });
-              });
-              return Object.keys(byMonth).sort().reverse().map(function(m){
-                var md = byMonth[m];
-                return (
-                  <div key={m} style={{borderBottom:"1px solid var(--border)"}}>
-                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontSize:15,fontWeight:700}}>{monthLabel(m)}</div><div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{md.flats.length} flat{md.flats.length>1?"s":""} overdue</div></div>
-                      <div style={{fontSize:16,fontWeight:700,color:"var(--red)"}}>{fmtRupee(md.total)}</div>
-                    </div>
-                    <div style={{padding:"0 16px 10px"}}>
-                      {md.flats.map(function(x){
-                        return <div key={x.flat} className="overdue-month-row"><span>Flat {x.flat}</span><span style={{fontWeight:600,color:"var(--red)"}}>{fmtRupee(x.amount)}</span></div>;
                       })}
                     </div>
                   </div>
