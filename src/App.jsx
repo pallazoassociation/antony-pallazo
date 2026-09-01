@@ -1085,6 +1085,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {showAdminPass && (
         <AdminChangePasswordModal
           profile={userProfile}
           onClose={function(){setShowAdminPass(false);}}
