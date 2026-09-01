@@ -272,6 +272,8 @@ export default function App() {
   var [userProfile, setUserProfile] = useState(null);
   var [appLoading, setAppLoading] = useState(true);
   var [showAdminPass, setShowAdminPass] = useState(false);
+  var [showAdminNotif, setShowAdminNotif] = useState(false);
+  var [adminNotifs, setAdminNotifs] = useState([]);
   var [dataLoading, setDataLoading] = useState(false);
   var [tab, setTab] = useState("home");
   var [flats,            setFlats]            = useState([]);
@@ -519,6 +521,27 @@ export default function App() {
       await supabase.from("bills").update({status:"paid",arrears:0})
         .eq("flat_id",flat.id).eq("billing_month",selMonth);
       showToast("✅ Payment saved for "+monthLabel(selMonth));
+      // Offer WhatsApp receipt
+      var ownerPhone = flat.owner_phone||"";
+      var ai = aptInfo||{};
+      var receiptMsg = [
+        "🏛 Antony Pallazo — Payment Confirmation",
+        "",
+        "Flat: "+flat.flat_no+" ("+flat.bhk_type+")",
+        "Month: "+monthLabel(selMonth),
+        "Amount: ₹"+amt.toLocaleString("en-IN"),
+        "Mode: "+payForm.mode,
+        "Date: "+payDate,
+        payForm.ref?"Ref: "+payForm.ref:"",
+        "",
+        "✅ Payment recorded successfully.",
+        "Thank you! — Antony Pallazo Association"
+      ].filter(Boolean).join("\n");
+      if(ownerPhone) {
+        if(window.confirm("Send payment receipt via WhatsApp to "+ownerPhone+"?")) {
+          window.open("https://wa.me/91"+ownerPhone+"?text="+encodeURIComponent(receiptMsg),"_blank");
+        }
+      }
 
     } else {
       // Advance payment — multiple months
@@ -679,7 +702,7 @@ export default function App() {
         </div>
         <div className="hdr-btns">
           <button className="icon-btn" onClick={function(){setShowAdminPass(true);}} title="Change Password">🔒</button>
-          <button className="icon-btn" style={{position:"relative"}} onClick={function(){setTab("approvals");}} title="Notifications">
+          <button className="icon-btn" style={{position:"relative"}} onClick={function(){setShowAdminNotif(true);}} title="Notifications">
             🔔
             {pendingCount>0&&<span style={{position:"absolute",top:2,right:2,background:"var(--red)",color:"#FFF",borderRadius:99,fontSize:9,fontWeight:700,padding:"1px 4px",minWidth:14,textAlign:"center"}}>{pendingCount}</span>}
           </button>
@@ -697,10 +720,12 @@ export default function App() {
         <div style={{display:tab==="info"?"block":"none"}}><InfoTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="notices"?"block":"none"}}><NoticesTab notices={notices} showToast={showToast} reload={loadData}/></div>
+        <div style={{display:tab==="advance"?"block":"none"}}><AdvancePaymentDashboard flats={flats} allPayments={allPayments}/></div>
+        <div style={{display:tab==="salary"?"block":"none"}}><StaffSalaryTracker showToast={showToast}/></div>
       </div>
 
       <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"notices",icon:"📢",label:"Notices"}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"notices",icon:"📢",label:"Notices"},{id:"advance",icon:"📅",label:"Advance"},{id:"salary",icon:"👷",label:"Salary"}].map(function(t){
           return (
             <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:64,flexShrink:0}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
@@ -735,19 +760,53 @@ export default function App() {
                 })}
                 <div className="info-row">
                   <span className="ir-label">Occupancy</span>
-                  <span className="ir-value" style={{display:"flex",alignItems:"center",gap:8}}>
-                    {selFlat.occupancy==="owner"?"Owner Occupied":"Rented / Tenant"}
-                    <button onClick={async function(){
-                      var newOcc = selFlat.occupancy==="owner"?"rented":"owner";
-                      await supabase.from("flats").update({occupancy:newOcc}).eq("id",selFlat.id);
-                      showToast("Updated to "+(newOcc==="owner"?"Owner Occupied":"Rented"));
-                      await loadData();
-                      setSelFlat(null);
-                    }} style={{fontSize:10,padding:"2px 8px",border:"1.5px solid var(--gold)",borderRadius:6,background:"transparent",color:"var(--gold)",cursor:"pointer",fontWeight:600}}>
-                      Toggle
-                    </button>
-                  </span>
+                  <select className="ir-value" style={{border:"none",background:"transparent",fontWeight:600,cursor:"pointer",color:"var(--text)",textAlign:"right"}}
+                    value={selFlat.occupancy||"owner"}
+                    onChange={async function(e){
+                      var val=e.target.value;
+                      await supabase.from("flats").update({occupancy:val}).eq("id",selFlat.id);
+                      setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,{occupancy:val}):f;});});
+                      setSelFlat(function(p){return Object.assign({},p,{occupancy:val});});
+                      showToast("✅ Occupancy updated");
+                    }}>
+                    <option value="owner">Owner Occupied</option>
+                    <option value="rented">Rented / Tenant</option>
+                    <option value="vacant">Vacant</option>
+                  </select>
                 </div>
+                {/* Owner Contact Details */}
+                <div style={{margin:"10px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Owner Details</div>
+                {[["owner_name","Owner Name","e.g. John Doe"],["owner_phone","Owner Phone","10-digit mobile"],["owner_email","Owner Email","email@example.com"]].map(function(fld){
+                  return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
+                    <span className="ir-label">{fld[1]}</span>
+                    <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
+                      placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
+                      onBlur={async function(e){
+                        var val=e.target.value.trim();
+                        if(val===(selFlat[fld[0]]||"")) return;
+                        var upd={}; upd[fld[0]]=val||null;
+                        await supabase.from("flats").update(upd).eq("id",selFlat.id);
+                        setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
+                        setSelFlat(function(p){return Object.assign({},p,upd);});
+                        showToast("✅ "+fld[1]+" saved");
+                      }}/></div>;
+                })}
+                <div style={{margin:"10px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Tenant Details</div>
+                {[["tenant_name","Tenant Name","e.g. Jane Doe"],["tenant_phone","Tenant Phone","10-digit mobile"]].map(function(fld){
+                  return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
+                    <span className="ir-label">{fld[1]}</span>
+                    <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
+                      placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
+                      onBlur={async function(e){
+                        var val=e.target.value.trim();
+                        if(val===(selFlat[fld[0]]||"")) return;
+                        var upd={}; upd[fld[0]]=val||null;
+                        await supabase.from("flats").update(upd).eq("id",selFlat.id);
+                        setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
+                        setSelFlat(function(p){return Object.assign({},p,upd);});
+                        showToast("✅ "+fld[1]+" saved");
+                      }}/></div>;
+                })}
               </div>
               {overdueByFlat[selFlat.id] && overdueByFlat[selFlat.id].length > 0 && (
                 <>
@@ -817,8 +876,30 @@ export default function App() {
                   }}>✓ Mark Paid</button>
                 )}
 
-                <button className="btn btn-secondary" onClick={function(){showToast("💬 Reminder sent to Flat "+selFlat.flat_no);}}>💬 Remind</button>
-                <button className="btn btn-secondary" onClick={function(){showToast("📤 Bill sent to Flat "+selFlat.flat_no);}}>📤 Send Bill</button>
+                <button className="btn btn-secondary" onClick={function(){
+                  var phone = selFlat.owner_phone||"";
+                  var ai = aptInfo||{};
+                  var overdueMonths = (props.overdueByFlat||{})[selFlat.id]||[];
+                  if(overdueMonths.length===0){ showToast("No overdue months for this flat"); return; }
+                  var monthList = overdueMonths.map(function(m){return "• "+monthLabel(m.month)+" — ₹"+m.amount.toLocaleString("en-IN");}).join("\n");
+                  var total = overdueMonths.reduce(function(s,m){return s+m.amount;},0);
+                  var msg = ["Dear Flat "+selFlat.flat_no+" Owner,","","Friendly reminder from Antony Pallazo Apartment Association.","","📌 Outstanding Maintenance Dues:",monthList,"Total Due: ₹"+total.toLocaleString("en-IN"),"","🏦 Bank: "+(ai.bank_name||"ICICI BANK LTD")+", Acc: "+(ai.acc_no||"270201000458"),"UPI: "+(ai.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici"),"","Please pay at the earliest. Thank you! 🙏"].join("\n");
+                  if(!phone){ alert("No owner phone saved for this flat.\nMessage:\n\n"+msg); return; }
+                  window.open("https://wa.me/91"+phone+"?text="+encodeURIComponent(msg),"_blank");
+                }}>📱 WA Reminder</button>
+                <button className="btn btn-secondary" onClick={async function(){
+                  var fy = window.prompt("Financial Year (e.g. 2025-2026):",new Date().getFullYear()-1+"-"+new Date().getFullYear());
+                  if(!fy) return;
+                  var fp=fy.split("-");
+                  var {data:pays}=await supabase.from("payments").select("*").eq("flat_id",selFlat.id).gte("billing_month",fp[0]+"-04").lte("billing_month",fp[1]+"-03").order("billing_month");
+                  var total=(pays||[]).reduce(function(s,p){return s+p.amount_paid;},0);
+                  var ai=aptInfo||{};
+                  var rows=(pays||[]).map(function(p){return "<tr><td>"+monthLabel(p.billing_month)+"</td><td>"+p.payment_date+"</td><td>"+p.mode+"</td><td style='text-align:right'>₹"+p.amount_paid.toLocaleString("en-IN")+"</td></tr>";}).join("");
+                  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Certificate</title><style>body{font-family:Arial,sans-serif;max-width:600px;margin:40px auto;padding:20px}.header{text-align:center;border-bottom:3px solid #1A1410;padding-bottom:16px;margin-bottom:24px}h1{margin:0;font-size:20px;color:#1A1410}h2{margin:4px 0 0;font-size:13px;font-weight:normal;color:#666}.cert{background:#F8F6F0;border:2px solid #1A1410;border-radius:8px;padding:20px;margin:20px 0;text-align:center;line-height:2}.bold{font-weight:bold;font-size:18px}table{width:100%;border-collapse:collapse;margin:16px 0}th{background:#1A1410;color:#FFF;padding:8px;text-align:left}td{padding:8px;border-bottom:1px solid #eee}.total{background:#F8F6F0;font-weight:bold}.footer{text-align:center;margin-top:24px;color:#999;font-size:11px;border-top:1px solid #eee;padding-top:16px}</style></head><body><div class="header"><h1>Antony Pallazo</h1><h2>'+(ai.address||"Gangai Amman Kovil Street, Medavakkam, Chennai-600100")+'</h2></div><div class="cert"><p>This is to certify that</p><p class="bold">Flat '+selFlat.flat_no+' — '+selFlat.bhk_type+'</p><p>has paid maintenance for FY <span class="bold">'+fy+'</span></p><p>Total: <span class="bold">₹'+total.toLocaleString("en-IN")+'</span></p></div><table><tr><th>Month</th><th>Date</th><th>Mode</th><th>Amount</th></tr>'+rows+'<tr class="total"><td colspan="3">Total</td><td style="text-align:right">₹'+total.toLocaleString("en-IN")+'</td></tr></table><div class="footer">Issued by Antony Pallazo Apartment Residents Welfare Association · '+new Date().toLocaleDateString("en-IN")+'</div></body></html>';
+                  var a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([html],{type:"text/html"}));
+                  a.download="Certificate_"+selFlat.flat_no+"_FY"+fy+".html"; a.click();
+                  showToast("✅ Certificate downloaded!");
+                }}>📜 Annual Certificate</button>
               </div>
             </div>
           </div>
@@ -973,7 +1054,37 @@ export default function App() {
         </div>
       )}
 
-      {showAdminPass && (
+      {/* Admin Notification Feed */}
+      {showAdminNotif && (
+        <div className="overlay" onClick={function(){setShowAdminNotif(false);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-head">
+              <div><div className="sheet-title">🔔 Notifications</div><div className="sheet-sub">Recent activity</div></div>
+              <button className="close-btn" onClick={function(){setShowAdminNotif(false);}}>✕</button>
+            </div>
+            <div className="sheet-body" style={{padding:0}}>
+              {pendingCount>0&&(
+                <div style={{padding:"12px 16px",background:"#FFF9E6",borderBottom:"1px solid var(--border)"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--gold)"}}>⏳ {pendingCount} pending approval{pendingCount>1?"s":""}</div>
+                  <button onClick={function(){setShowAdminNotif(false);setTab("approvals");}} style={{marginTop:6,fontSize:12,color:"var(--gold)",background:"none",border:"1.5px solid var(--gold)",borderRadius:6,padding:"4px 12px",cursor:"pointer",fontWeight:600}}>
+                    View Approvals →
+                  </button>
+                </div>
+              )}
+              {(function(){
+                var recentPay = (allPayments||[]).slice(0,5);
+                return recentPay.map(function(p,i){
+                  return <div key={i} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+                    <div style={{fontSize:13,fontWeight:600}}>💰 Flat {p.flat_id} — {monthLabel(p.billing_month)}</div>
+                    <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{fmtRupee(p.amount_paid)} · {p.mode} · {p.payment_date}</div>
+                  </div>;
+                });
+              })()}
+              {(allPayments||[]).length===0&&<div className="empty"><div className="empty-icon">🔔</div><div>No recent activity</div></div>}
+            </div>
+          </div>
+        </div>
+      )}
         <AdminChangePasswordModal
           profile={userProfile}
           onClose={function(){setShowAdminPass(false);}}
@@ -1238,6 +1349,14 @@ function OverdueTab(props) {
         arrears: isFullPaid ? 0 : payingMonth.amount - amt
       }).eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
       props.showToast("✅ Payment recorded for Flat "+payingMonth.flat_no+" — "+monthLabel(payingMonth.month));
+      // Offer WhatsApp receipt
+      var flatObj = (props.flats||[]).find(function(f){return f.id===payingMonth.flat_id;});
+      var ownerPhone = flatObj?.owner_phone||"";
+      if(ownerPhone){
+        var rMsg = ["🏛 Antony Pallazo — Payment Confirmation","","Flat: "+payingMonth.flat_no,"Month: "+monthLabel(payingMonth.month),"Amount: "+fmtRupee(parseInt(payForm.amount)),"Mode: "+payForm.mode,"Date: "+payForm.payDate,payForm.ref?"Ref: "+payForm.ref:"","✅ Payment recorded. Thank you!"].filter(Boolean).join("\n");
+        if(window.confirm("Send receipt via WhatsApp to "+ownerPhone+"?"))
+          window.open("https://wa.me/91"+ownerPhone+"?text="+encodeURIComponent(rMsg),"_blank");
+      }
       setPayingMonth(null);
       await props.reload();
     } catch(e) {
@@ -1372,7 +1491,7 @@ function OverdueTab(props) {
                             "Please make the payment at the earliest and share the screenshot for confirmation.",
                             "Thank you! 🙏"
                           ].join("\n");
-                          var phone = f.owner_phone||f.phone||"";
+                          var phone = f.owner_phone||"";
                           setWaMsg({flat_no:f.flat_no, months:months, text:msg, phone:phone});
                         }} style={{background:"#25D366",color:"#FFF",border:"none",borderRadius:6,padding:"3px 8px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
                           📱 WA
@@ -2449,14 +2568,23 @@ function ResidentPortal(props) {
 
             {overdueBills.length>0&&(
               <div style={{margin:"14px 16px 0"}}>
-                <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:8}}>Overdue Months</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Outstanding Dues</div>
+                  <div style={{fontSize:12,fontWeight:700,color:"var(--red)"}}>{overdueBills.length} month{overdueBills.length>1?"s":""} · {fmtRupee(totalDue)}</div>
+                </div>
                 <div className="card">
-                  {overdueBills.map(function(b){
+                  {overdueBills.slice().sort(function(a,b){return a.billing_month.localeCompare(b.billing_month);}).map(function(b){
                     return <div key={b.billing_month} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 16px",borderBottom:"1px solid var(--border)"}}>
-                      <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(b.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Due by 15th</div></div>
+                      <div><div style={{fontSize:13,fontWeight:600}}>{monthLabel(b.billing_month)}</div><div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{b.billing_month < new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0") ? "Past due" : "Due by 15th"}</div></div>
                       <div style={{textAlign:"right"}}><div style={{fontWeight:700,color:"var(--red)"}}>{fmtRupee(b.arrears||b.total_amount)}</div><div className="chip overdue">Overdue</div></div>
                     </div>;
                   })}
+                  {overdueBills.length>1&&(
+                    <div style={{padding:"11px 16px",background:"#FDF2F2",display:"flex",justifyContent:"space-between"}}>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--red)"}}>Total Outstanding</span>
+                      <span style={{fontSize:14,fontWeight:700,color:"var(--red)"}}>{fmtRupee(totalDue)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3242,7 +3370,28 @@ function ApprovalsTab(props) {
         <div style={{padding:"10px 16px 24px"}}>
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{residents.length} registered residents</div>
-            <button className="add-btn" onClick={function(){setShowAddUser(true);}}>＋ Add User</button>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={function(){
+                // Export residents to Excel
+                var XLSX = window.XLSX;
+                if(!XLSX){ props.showToast("❌ Excel library not loaded"); return; }
+                var rows = residents.map(function(r){
+                  return {
+                    "Flat":r.flat_id, "Name":r.name, "Phone":r.phone,
+                    "Role":r.role, "Status":r.status,
+                    "Registered":r.created_at?.slice(0,10)||""
+                  };
+                });
+                var ws = XLSX.utils.json_to_sheet(rows);
+                var wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Residents");
+                XLSX.writeFile(wb, "Antony_Pallazo_Residents.xlsx");
+                props.showToast("✅ Residents exported!");
+              }} style={{fontSize:11,padding:"4px 10px",border:"1.5px solid var(--green)",borderRadius:6,background:"transparent",color:"var(--green)",cursor:"pointer",fontWeight:600}}>
+                📥 Export Excel
+              </button>
+              <button className="add-btn" onClick={function(){setShowAddUser(true);}}>＋ Add User</button>
+            </div>
           </div>
           <div className="card">
             {residents.map(function(u){
@@ -4280,6 +4429,177 @@ function NoticesTab(props) {
                 </div>
                 <button onClick={function(){deleteNotice(n.id);}}
                   style={{border:"none",background:"none",color:"var(--red)",cursor:"pointer",fontSize:16,flexShrink:0}}>🗑</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Advance Payment Dashboard ──────────────────────────────────
+function AdvancePaymentDashboard(props) {
+  var today = new Date();
+  var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
+  // Find flats with future paid months
+  var advanceFlats = [];
+  (props.flats||[]).forEach(function(f){
+    var futurePaid = (props.allPayments||[]).filter(function(p){
+      return p.flat_id===f.id && p.billing_month > curMonth;
+    }).sort(function(a,b){return a.billing_month.localeCompare(b.billing_month);});
+    if(futurePaid.length>0) advanceFlats.push({flat:f, months:futurePaid});
+  });
+  return (
+    <div style={{padding:"14px 16px 24px"}}>
+      <div style={{background:"linear-gradient(135deg,#0A2A4A,#0D3B6E)",borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div style={{color:"rgba(255,255,255,.6)",fontSize:10,letterSpacing:"1px",textTransform:"uppercase",marginBottom:4}}>Advance Payments</div>
+        <div style={{color:"#FFF",fontSize:26,fontWeight:700,fontFamily:"'Playfair Display',serif"}}>{advanceFlats.length} Flats</div>
+        <div style={{color:"rgba(255,255,255,.6)",fontSize:12,marginTop:4}}>have paid in advance</div>
+      </div>
+      <div className="card">
+        {advanceFlats.length===0&&<div className="empty"><div className="empty-icon">📅</div><div>No advance payments recorded</div></div>}
+        {advanceFlats.map(function(af){
+          var lastMonth = af.months[af.months.length-1].billing_month;
+          var totalAmt = af.months.reduce(function(s,p){return s+p.amount_paid;},0);
+          return (
+            <div key={af.flat.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700}}>Flat {af.flat.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {af.flat.bhk_type}</span></div>
+                  <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{af.months.length} month{af.months.length>1?"s":""} paid ahead · Paid till {monthLabel(lastMonth)}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontWeight:700,color:"#0D3B6E"}}>{fmtRupee(totalAmt)}</div>
+                  <div className="chip paid">{af.months.length} Advance</div>
+                </div>
+              </div>
+              <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+                {af.months.map(function(m){
+                  return <span key={m.billing_month} style={{fontSize:11,background:"#E8F0FE",color:"#0D3B6E",borderRadius:6,padding:"2px 8px",fontWeight:600}}>{monthLabel(m.billing_month)}</span>;
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Staff Salary Tracker ────────────────────────────────────────
+function StaffSalaryTracker(props) {
+  var [selMonth, setSelMonth] = useState(getCurrentMonth());
+  var [salaries, setSalaries] = useState([]);
+  var [loading, setLoading] = useState(false);
+  var [paying, setPaying] = useState(null);
+  var [payForm, setPayForm] = useState({amount:"",mode:"Cash",paid_date:new Date().toISOString().split("T")[0],reference:""});
+  var [saving, setSaving] = useState(false);
+
+  useEffect(function(){ loadSalaries(); },[selMonth]);
+
+  async function loadSalaries() {
+    setLoading(true);
+    var [emp, paid] = await Promise.all([
+      supabase.from("employee_details").select("*").order("name"),
+      supabase.from("salary_payments").select("*").eq("payment_month",selMonth),
+    ]);
+    var paidMap = {};
+    (paid.data||[]).forEach(function(p){ paidMap[p.employee_id]=p; });
+    setSalaries((emp.data||[]).map(function(e){ return Object.assign({},e,{payment:paidMap[e.id]||null}); }));
+    setLoading(false);
+  }
+
+  async function markPaid(emp) {
+    if(!payForm.paid_date){ props.showToast("⚠️ Enter payment date"); return; }
+    var amt = parseInt(payForm.amount)||emp.salary||0;
+    if(!amt){ props.showToast("⚠️ Enter salary amount"); return; }
+    setSaving(true);
+    if(emp.payment){
+      await supabase.from("salary_payments").update({amount:amt,mode:payForm.mode,paid_date:payForm.paid_date,reference:payForm.reference||null,status:"paid"}).eq("id",emp.payment.id);
+    } else {
+      await supabase.from("salary_payments").insert({employee_id:emp.id,payment_month:selMonth,amount:amt,mode:payForm.mode,paid_date:payForm.paid_date,reference:payForm.reference||null,status:"paid"});
+    }
+    props.showToast("✅ Salary paid for "+emp.name);
+    setPaying(null);
+    setSaving(false);
+    await loadSalaries();
+  }
+
+  var totalPayroll = salaries.reduce(function(s,e){return s+(e.salary||0);},0);
+  var totalPaid = salaries.filter(function(e){return e.payment;}).reduce(function(s,e){return s+(e.payment?.amount||0);},0);
+
+  return (
+    <div style={{padding:"14px 16px 24px"}}>
+      {paying && (
+        <div className="overlay" onClick={function(){setPaying(null);}}>
+          <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+            <div className="sheet-head">
+              <div><div className="sheet-title">Pay Salary</div><div className="sheet-sub">{paying.name} · {monthLabel(selMonth)}</div></div>
+              <button className="close-btn" onClick={function(){setPaying(null);}}>✕</button>
+            </div>
+            <div className="sheet-body">
+              <div className="form-group"><label className="form-label">Amount (₹)</label>
+                <input className="form-input" type="number" value={payForm.amount} placeholder={String(paying.salary||"")}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{amount:e.target.value});})}}/></div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div className="form-group"><label className="form-label">Mode</label>
+                  <select className="form-input" value={payForm.mode} onChange={function(e){setPayForm(function(p){return Object.assign({},p,{mode:e.target.value});})}}>
+                    {["Cash","UPI","NEFT","Bank Transfer"].map(function(m){return <option key={m}>{m}</option>;})}
+                  </select></div>
+                <div className="form-group"><label className="form-label">Paid Date</label>
+                  <input className="form-input" type="date" value={payForm.paid_date} max={new Date().toISOString().split("T")[0]}
+                    onChange={function(e){setPayForm(function(p){return Object.assign({},p,{paid_date:e.target.value});})}}/></div>
+              </div>
+              <div className="form-group"><label className="form-label">Reference</label>
+                <input className="form-input" placeholder="Transaction ref" value={payForm.reference}
+                  onChange={function(e){setPayForm(function(p){return Object.assign({},p,{reference:e.target.value});})}}/></div>
+              <button className="btn btn-success" onClick={function(){markPaid(paying);}} disabled={saving}>
+                {saving?<span className="spinner"/>:"✓ Confirm Payment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
+        <button style={{border:"none",background:"var(--card)",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:16}} onClick={function(){var d=new Date(selMonth+"-01");d.setMonth(d.getMonth()-1);setSelMonth(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));}}>‹</button>
+        <select className="form-input" style={{flex:1}} value={selMonth} onChange={function(e){setSelMonth(e.target.value);}}>
+          {ALL_MONTHS.slice().reverse().map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+        </select>
+        <button style={{border:"none",background:"var(--card)",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:16}} onClick={function(){var d=new Date(selMonth+"-01");d.setMonth(d.getMonth()+1);setSelMonth(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));}}>›</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+        {[["Total Payroll",fmtRupee(totalPayroll),"var(--text)"],["Paid",fmtRupee(totalPaid),"var(--green)"],["Pending",fmtRupee(totalPayroll-totalPaid),"var(--red)"],["Staff",salaries.length+" members","var(--gold)"]].map(function(x){
+          return <div key={x[0]} className="card" style={{padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:"var(--muted)"}}>{x[0]}</div>
+            <div style={{fontSize:15,fontWeight:700,color:x[2],marginTop:2}}>{x[1]}</div>
+          </div>;
+        })}
+      </div>
+      <div className="card">
+        {loading&&<div className="empty"><div className="empty-icon">⏳</div><div>Loading…</div></div>}
+        {!loading&&salaries.length===0&&<div className="empty"><div className="empty-icon">👷</div><div>No staff records found</div></div>}
+        {salaries.map(function(emp){
+          var paid = emp.payment;
+          return (
+            <div key={emp.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700}}>{emp.name}</div>
+                  <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{emp.role} {paid?"· Paid "+paid.paid_date:"· Not paid"}</div>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                  <div style={{fontWeight:700}}>{fmtRupee(paid?paid.amount:emp.salary||0)}</div>
+                  {paid
+                    ? <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <div className="chip paid">Paid</div>
+                        <button onClick={function(){setPayForm({amount:String(paid.amount),mode:paid.mode||"Cash",paid_date:paid.paid_date,reference:paid.reference||""});setPaying(emp);}}
+                          style={{fontSize:10,padding:"2px 8px",border:"1.5px solid var(--gold)",borderRadius:6,background:"transparent",color:"var(--gold)",cursor:"pointer",fontWeight:600}}>Edit</button>
+                      </div>
+                    : <button onClick={function(){setPayForm({amount:String(emp.salary||""),mode:"Cash",paid_date:new Date().toISOString().split("T")[0],reference:""});setPaying(emp);}}
+                        style={{background:"var(--green)",color:"#FFF",border:"none",borderRadius:8,padding:"5px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>✓ Pay</button>
+                  }
+                </div>
               </div>
             </div>
           );
