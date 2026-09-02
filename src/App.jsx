@@ -3200,15 +3200,9 @@ function ApprovalsTab(props) {
 
   async function rejectPayment(sub, reason){
     var upd = await supabase.from("payment_submissions")
-      .update({status:"rejected", rejection_reason:reason, reviewed_by:props.userProfile?.id||null, reviewed_at:new Date().toISOString()})
+      .update({status:"rejected", rejection_reason:reason, reviewed_at:new Date().toISOString()})
       .eq("id",sub.id);
     if(upd.error){ props.showToast("❌ Failed: "+upd.error.message); return; }
-    // Verify it was actually rejected
-    var verify = await supabase.from("payment_submissions").select("status").eq("id",sub.id).single();
-    if(verify.data?.status !== "rejected"){
-      props.showToast("⚠️ Rejection did not persist in DB");
-      return;
-    }
     if(sub.submitted_by){
       await supabase.from("notifications").insert({
         user_id:sub.submitted_by, type:"payment_rejected",
@@ -3219,13 +3213,11 @@ function ApprovalsTab(props) {
     }
     props.showToast("Payment rejected");
     setRejectForm(null);
-    // Update local state — remove from pending view immediately
     setPayments(function(prev){
       return prev.map(function(p){
         return p.id===sub.id ? Object.assign({},p,{status:"rejected",rejection_reason:reason}) : p;
       });
     });
-    // Reload after short delay to confirm fresh state
     setTimeout(function(){ loadApprovals(); }, 800);
   }
 
