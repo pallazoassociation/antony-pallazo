@@ -3199,12 +3199,34 @@ function ApprovalsTab(props) {
   }
 
   async function rejectPayment(sub, reason){
-    await supabase.from("payment_submissions").update({status:"rejected",rejection_reason:reason,reviewed_by:props.userProfile?.id||null,reviewed_at:new Date().toISOString()}).eq("id",sub.id);
-    await supabase.from("notifications").insert({user_id:sub.submitted_by,type:"payment_rejected",title:"Payment Rejected ❌",body:"Your payment for "+monthLabel(sub.billing_month)+" was rejected. Reason: "+reason,data:{flat_id:sub.flat_id}});
+    var upd = await supabase.from("payment_submissions")
+      .update({status:"rejected", rejection_reason:reason, reviewed_by:props.userProfile?.id||null, reviewed_at:new Date().toISOString()})
+      .eq("id",sub.id);
+    if(upd.error){ props.showToast("❌ Failed: "+upd.error.message); return; }
+    // Verify it was actually rejected
+    var verify = await supabase.from("payment_submissions").select("status").eq("id",sub.id).single();
+    if(verify.data?.status !== "rejected"){
+      props.showToast("⚠️ Rejection did not persist in DB");
+      return;
+    }
+    if(sub.submitted_by){
+      await supabase.from("notifications").insert({
+        user_id:sub.submitted_by, type:"payment_rejected",
+        title:"Payment Rejected ❌",
+        body:"Your payment of ₹"+sub.amount+" for "+monthLabel(sub.billing_month)+" was rejected. Reason: "+reason,
+        data:{flat_id:sub.flat_id}
+      });
+    }
     props.showToast("Payment rejected");
     setRejectForm(null);
-    // Immediately update local state
-    setPayments(function(prev){ return prev.map(function(p){ return p.id===sub.id ? Object.assign({},p,{status:"rejected",rejection_reason:reason}) : p; }); });
+    // Update local state — remove from pending view immediately
+    setPayments(function(prev){
+      return prev.map(function(p){
+        return p.id===sub.id ? Object.assign({},p,{status:"rejected",rejection_reason:reason}) : p;
+      });
+    });
+    // Reload after short delay to confirm fresh state
+    setTimeout(function(){ loadApprovals(); }, 800);
   }
 
   async function toggleAdmin(user){
