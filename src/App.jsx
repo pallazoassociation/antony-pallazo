@@ -721,11 +721,10 @@ export default function App() {
         <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="notices"?"block":"none"}}><NoticesTab notices={notices} showToast={showToast} reload={loadData}/></div>
         <div style={{display:tab==="advance"?"block":"none"}}><AdvancePaymentDashboard flats={flats} allPayments={allPayments}/></div>
-        <div style={{display:tab==="salary"?"block":"none"}}><StaffSalaryTracker showToast={showToast}/></div>
       </div>
 
       <nav className="tabbar" style={{overflowX:"auto",justifyContent:"flex-start"}}>
-        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"notices",icon:"📢",label:"Notices"},{id:"advance",icon:"📅",label:"Advance"},{id:"salary",icon:"👷",label:"Salary"}].map(function(t){
+        {[{id:"home",icon:"🏠",label:"Home"},{id:"approvals",icon:"✅",label:"Approvals",badge:true},{id:"flats",icon:"🏢",label:"Flats"},{id:"overdue",icon:"🚨",label:"Overdue"},{id:"income",icon:"💰",label:"Income"},{id:"expenses",icon:"💳",label:"Expenses"},{id:"reports",icon:"📊",label:"Reports"},{id:"info",icon:"ℹ️",label:"Info"},{id:"notices",icon:"📢",label:"Notices"},{id:"advance",icon:"📅",label:"Advance"}].map(function(t){
           return (
             <button key={t.id} className={"tab-item"+(tab===t.id?" active":"")} onClick={function(){setTab(t.id);}} style={{position:"relative",minWidth:64,flexShrink:0}}>
               <span className="tab-icon">{t.icon}</span>{t.label}
