@@ -274,6 +274,7 @@ export default function App() {
   var [showAdminPass, setShowAdminPass] = useState(false);
   var [showAdminNotif, setShowAdminNotif] = useState(false);
   var [adminNotifs, setAdminNotifs] = useState([]);
+  var [approvalInitSec, setApprovalInitSec] = useState("registrations");
   var [dataLoading, setDataLoading] = useState(false);
   var [tab, setTab] = useState("home");
   var [flats,            setFlats]            = useState([]);
@@ -718,7 +719,7 @@ export default function App() {
         <div style={{display:tab==="expenses"?"block":"none"}}><ExpensesTab {...sharedProps} reload={loadData}/></div>
         <div style={{display:tab==="reports"?"block":"none"}}><ReportsTab {...sharedProps}/></div>
         <div style={{display:tab==="info"?"block":"none"}}><InfoTab {...sharedProps} reload={loadData}/></div>
-        <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData}/></div>
+        <div style={{display:tab==="approvals"?"block":"none"}}><ApprovalsTab {...sharedProps} reload={loadData} initSec={approvalInitSec}/></div>
         <div style={{display:tab==="notices"?"block":"none"}}><NoticesTab notices={notices} showToast={showToast} reload={loadData}/></div>
         <div style={{display:tab==="advance"?"block":"none"}}><AdvancePaymentDashboard flats={flats} allPayments={allPayments}/></div>
       </div>
@@ -1065,7 +1066,16 @@ export default function App() {
               {pendingCount>0&&(
                 <div style={{padding:"12px 16px",background:"#FFF9E6",borderBottom:"1px solid var(--border)"}}>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--gold)"}}>⏳ {pendingCount} pending approval{pendingCount>1?"s":""}</div>
-                  <button onClick={function(){setShowAdminNotif(false);setTab("approvals");}} style={{marginTop:6,fontSize:12,color:"var(--gold)",background:"none",border:"1.5px solid var(--gold)",borderRadius:6,padding:"4px 12px",cursor:"pointer",fontWeight:600}}>
+                  <button onClick={async function(){
+                    setShowAdminNotif(false);
+                    // Check what's pending to navigate to correct section
+                    var {data:pend} = await supabase.from("pending_approvals_summary").select("*").single();
+                    var targetSec = "registrations";
+                    if(pend && (pend.pending_payments||0)>0) targetSec = "payments";
+                    else if(pend && (pend.pending_registrations||0)>0) targetSec = "registrations";
+                    setApprovalInitSec(targetSec);
+                    setTab("approvals");
+                  }} style={{marginTop:6,fontSize:12,color:"var(--gold)",background:"none",border:"1.5px solid var(--gold)",borderRadius:6,padding:"4px 12px",cursor:"pointer",fontWeight:600}}>
                     View Approvals →
                   </button>
                 </div>
@@ -2962,7 +2972,7 @@ function ResidentPortal(props) {
 
 // ── ApprovalsTab ───────────────────────────────────────────────
 function ApprovalsTab(props) {
-  var [sec, setSec] = useState("registrations");
+  var [sec, setSec] = useState(props.initSec||"registrations");
   var [requests, setRequests] = useState([]);
   var [payments, setPayments] = useState([]);
   var [residents, setResidents] = useState([]);
@@ -2978,6 +2988,10 @@ function ApprovalsTab(props) {
   useEffect(function(){
     loadApprovals();
   },[]);
+
+  useEffect(function(){
+    if(props.initSec) setSec(props.initSec);
+  },[props.initSec]);
 
   useEffect(function(){
     if (editUser) setUserForm({name:editUser.name,flat_id:editUser.flat_id,role:editUser.role,phone:editUser.phone,password:"",status:editUser.status});
@@ -3347,16 +3361,27 @@ function ApprovalsTab(props) {
           {payments.filter(function(p){return p.status!=="pending";}).length>0&&(
             <div style={{marginTop:12}}>
               <div style={{fontSize:11,color:"var(--muted)",fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Recently Processed</div>
-              {payments.filter(function(p){return p.status!=="pending";}).slice(0,5).map(function(p){
+              {payments.filter(function(p){return p.status!=="pending";}).slice(0,10).map(function(p){
                 return (
-                  <div key={p.id} style={{padding:"10px 14px",borderRadius:10,background:"var(--card)",marginBottom:8,border:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center",opacity:0.7}}>
+                  <div key={p.id} style={{padding:"10px 14px",borderRadius:10,background:"var(--card)",marginBottom:8,border:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center",opacity:0.8}}>
                     <div>
                       <div style={{fontSize:12,fontWeight:600}}>Flat {p.flat_id} · {monthLabel(p.billing_month)}</div>
                       <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{p.mode} · {p.transaction_date||p.created_at?.slice(0,10)}</div>
+                      {p.rejection_reason&&<div style={{fontSize:11,color:"var(--red)",marginTop:2}}>Reason: {p.rejection_reason}</div>}
                     </div>
-                    <div style={{textAlign:"right"}}>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
                       <div style={{fontWeight:700,fontSize:13}}>{fmtRupee(p.amount)}</div>
-                      <div className={"chip "+(p.status==="approved"?"paid":"overdue")} style={{fontSize:10}}>{p.status}</div>
+                      <div className={"chip "+(p.status==="approved"?"paid":"overdue")} style={{fontSize:10}}>
+                        {p.status==="approved"?"✅ Approved":"❌ Rejected"}
+                      </div>
+                      {p.status==="rejected"&&(
+                        <button onClick={async function(){
+                          if(!window.confirm("Delete this rejected submission?")) return;
+                          await supabase.from("payment_submissions").delete().eq("id",p.id);
+                          setPayments(function(prev){return prev.filter(function(x){return x.id!==p.id;});});
+                          props.showToast("Deleted");
+                        }} style={{fontSize:10,color:"var(--red)",background:"none",border:"none",cursor:"pointer",padding:0}}>🗑 Delete</button>
+                      )}
                     </div>
                   </div>
                 );
