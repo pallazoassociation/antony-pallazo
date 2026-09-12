@@ -2611,6 +2611,39 @@ function ResidentPortal(props) {
                 });});
                 setShowPayForm(true);
               }}>💸 Submit Payment</button>
+              {/* UPI Pay button - opens UPI app directly */}
+              {(function(){
+                var anyBill = bills.find(function(b){return b.total_amount>0;});
+                var flatCharge = anyBill ? anyBill.total_amount : 0;
+                var curBill = bills.find(function(b){return b.billing_month===getCurrentMonth()&&b.status==="overdue";});
+                if(!curBill&&overdueBills.length===0) return null; // nothing due
+                var dueBill = curBill||overdueBills[0];
+                var upiId = resAptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici";
+                var payeeName = "Antony Pallazo";
+                var amount = dueBill ? (dueBill.arrears||dueBill.total_amount||flatCharge) : flatCharge;
+                var note = "Flat "+flatId+" "+monthLabel(dueBill?dueBill.billing_month:getCurrentMonth())+" Maintenance";
+                var upiUrl = "upi://pay?pa="+encodeURIComponent(upiId)+"&pn="+encodeURIComponent(payeeName)+"&am="+amount+"&cu=INR&tn="+encodeURIComponent(note);
+                return (
+                  <a href={upiUrl} style={{display:"block",background:"#1A9C3E",color:"#FFF",textAlign:"center",padding:"13px",borderRadius:12,fontWeight:700,fontSize:15,textDecoration:"none",marginTop:10,letterSpacing:"0.3px"}}
+                    onClick={function(){
+                      // After UPI payment, remind resident to submit screenshot
+                      setTimeout(function(){
+                        if(window.confirm("Did your UPI payment go through?\n\nTap OK to submit payment details for admin verification.")){
+                          var anyBill2 = bills.find(function(b){return b.total_amount>0;});
+                          var fc = anyBill2?anyBill2.total_amount:"";
+                          setPayForm(function(p){return Object.assign({},p,{
+                            billing_month:dueBill?dueBill.billing_month:getCurrentMonth(),
+                            amount:String(amount),
+                            mode:"UPI"
+                          });});
+                          setShowPayForm(true);
+                        }
+                      }, 3000);
+                    }}>
+                    💳 Pay via UPI — {fmtRupee(amount)}
+                  </a>
+                );
+              })()}
             </div>
 
             <div style={{margin:"14px 16px 0"}}>
@@ -2817,6 +2850,29 @@ function ResidentPortal(props) {
                 <button className="close-btn" onClick={function(){setShowPayForm(false);}}>✕</button>
               </div>
               <div className="sheet-body">
+                {/* UPI Quick Pay Banner */}
+                {(function(){
+                  var upiId = resAptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici";
+                  var amt = parseInt(payForm.amount)||0;
+                  var month = payForm.billing_month||getCurrentMonth();
+                  var note = "Flat "+flatId+" "+monthLabel(month)+" Maintenance";
+                  var upiUrl = "upi://pay?pa="+encodeURIComponent(upiId)+"&pn="+encodeURIComponent("Antony Pallazo")+"&am="+(amt||"")+"&cu=INR&tn="+encodeURIComponent(note);
+                  return (
+                    <div style={{background:"linear-gradient(135deg,#0F5C2A,#1A9C3E)",borderRadius:14,padding:"14px 16px",marginBottom:16}}>
+                      <div style={{color:"rgba(255,255,255,.7)",fontSize:11,marginBottom:6,letterSpacing:"0.5px"}}>STEP 1 — PAY VIA UPI</div>
+                      <a href={upiUrl} style={{display:"block",background:"#FFF",color:"#1A9C3E",textAlign:"center",padding:"12px",borderRadius:10,fontWeight:700,fontSize:15,textDecoration:"none",marginBottom:8}}>
+                        💳 Open UPI App {amt>0?"— "+fmtRupee(amt):""}
+                      </a>
+                      <div style={{display:"flex",justifyContent:"center",gap:16}}>
+                        {["GPay","PhonePe","Paytm","BHIM"].map(function(app){
+                          return <span key={app} style={{color:"rgba(255,255,255,.7)",fontSize:11}}>{app}</span>;
+                        })}
+                      </div>
+                      <div style={{color:"rgba(255,255,255,.6)",fontSize:11,marginTop:8,textAlign:"center"}}>After paying, fill details below and submit for admin verification</div>
+                    </div>
+                  );
+                })()}
+                <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",letterSpacing:"1px",marginBottom:10}}>STEP 2 — FILL PAYMENT DETAILS</div>
 
                 {/* Payment type toggle */}
                 <div style={{display:"flex",gap:0,marginBottom:14,borderRadius:10,overflow:"hidden",border:"1.5px solid var(--border)"}}>
@@ -4372,6 +4428,17 @@ function TenantInfoTab(props) {
             </div>
           );
         })}
+        {/* Quick UPI Pay button */}
+        {(function(){
+          var upiId = aptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici";
+          var charge = curSlab ? (bhk==="1BHK"?curSlab.charge_1bhk:bhk==="2BHK"?curSlab.charge_2bhk:curSlab.charge_3bhk) : 0;
+          var upiUrl = "upi://pay?pa="+encodeURIComponent(upiId)+"&pn="+encodeURIComponent("Antony Pallazo")+"&am="+charge+"&cu=INR&tn="+encodeURIComponent("Maintenance Payment");
+          return charge>0 ? (
+            <a href={upiUrl} style={{display:"block",background:"#1A9C3E",color:"#FFF",textAlign:"center",padding:"13px",borderRadius:10,fontWeight:700,fontSize:15,textDecoration:"none",marginTop:12}}>
+              💳 Pay ₹{charge.toLocaleString("en-IN")} via UPI
+            </a>
+          ) : null;
+        })()}
       </div>
     </div>
   );
