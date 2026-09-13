@@ -519,9 +519,21 @@ export default function App() {
         mode:payForm.mode, reference:payForm.ref||null, payment_date:payDate
       });
       if (r.error) { showToast("❌ "+r.error.message); return; }
-      await supabase.from("bills").update({status:"paid",arrears:0})
+      // Variance logic — partial or excess payment handling
+      var variance = amt - charge;
+      var billStatus = amt >= charge ? "paid" : "overdue";
+      var billArrears = amt >= charge ? 0 : charge - amt;
+      await supabase.from("bills")
+        .update({status:billStatus, arrears:billArrears, amount_paid:amt, variance:variance})
         .eq("flat_id",flat.id).eq("billing_month",selMonth);
-      showToast("✅ Payment saved for "+monthLabel(selMonth));
+      // Show variance toast
+      if(variance < 0){
+        showToast("✅ Payment saved — ⚠️ Shortfall of ₹"+Math.abs(variance).toLocaleString("en-IN")+" remains overdue");
+      } else if(variance > 0){
+        showToast("✅ Payment saved — ↑ Excess of ₹"+variance.toLocaleString("en-IN")+" recorded");
+      } else {
+        showToast("✅ Payment saved for "+monthLabel(selMonth));
+      }
       // Offer WhatsApp receipt
       var ownerPhone = flat.owner_phone||"";
       var ai = aptInfo||{};
@@ -848,15 +860,15 @@ export default function App() {
                       var amt = parseInt(newAmt);
                       if(isNaN(amt)||amt<=0){ showToast("Invalid amount"); return; }
                       await supabase.from("payments").update({amount_paid:amt}).eq("id",existPay.id);
-                      // If amount >= monthly charge, mark as paid; otherwise overdue for diff
+                      var vari = amt - selFlat.monthly_charge;
                       if(amt >= selFlat.monthly_charge){
-                        await supabase.from("bills").update({status:"paid",arrears:0})
+                        await supabase.from("bills").update({status:"paid",arrears:0,amount_paid:amt,variance:vari})
                           .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
                       } else {
-                        await supabase.from("bills").update({status:"overdue",arrears:selFlat.monthly_charge-amt})
+                        await supabase.from("bills").update({status:"overdue",arrears:selFlat.monthly_charge-amt,amount_paid:amt,variance:vari})
                           .eq("flat_id",selFlat.id).eq("billing_month",selMonth);
                       }
-                      showToast("✅ Payment updated to ₹"+amt);
+                      showToast("✅ Updated to ₹"+amt+(vari<0?" — Shortfall ₹"+Math.abs(vari):vari>0?" — Excess ₹"+vari:""));
                       await loadMonthData(selMonth);
                       await loadData();
                     }}>✏️ Edit Amount</button>
@@ -1353,13 +1365,23 @@ function OverdueTab(props) {
         await supabase.from("payments").insert({flat_id:payingMonth.flat_id,billing_month:payingMonth.month,
           amount_paid:amt,mode:payForm.mode,reference:payForm.ref||null,payment_date:payForm.payDate});
       }
-      // Update bill
+      // Update bill with variance tracking
+      var variance = amt - payingMonth.amount;
       var isFullPaid = amt >= payingMonth.amount;
       await supabase.from("bills").update({
         status: isFullPaid ? "paid" : "overdue",
-        arrears: isFullPaid ? 0 : payingMonth.amount - amt
+        arrears: isFullPaid ? 0 : payingMonth.amount - amt,
+        amount_paid: amt,
+        variance: variance
       }).eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
-      props.showToast("✅ Payment recorded for Flat "+payingMonth.flat_no+" — "+monthLabel(payingMonth.month));
+      // Toast with variance info
+      if(variance < 0){
+        props.showToast("✅ Recorded — ⚠️ Shortfall ₹"+Math.abs(variance).toLocaleString("en-IN")+" still overdue");
+      } else if(variance > 0){
+        props.showToast("✅ Recorded — ↑ Excess ₹"+variance.toLocaleString("en-IN")+" noted for Flat "+payingMonth.flat_no);
+      } else {
+        props.showToast("✅ Payment recorded for Flat "+payingMonth.flat_no+" — "+monthLabel(payingMonth.month));
+      }
       // Offer WhatsApp receipt
       var flatObj = (props.flats||[]).find(function(f){return f.id===payingMonth.flat_id;});
       var ownerPhone = flatObj?.owner_phone||"";
@@ -3196,12 +3218,23 @@ function ApprovalsTab(props) {
     try {
       console.log("[approve] starting:", sub.flat_id, sub.billing_month, "sub.id:", sub.id);
 
-      // Step 1: Update bill to paid
+      // Step 1: Get bill to compare amounts
+      var billData = await supabase.from("bills").select("total_amount").eq("flat_id",sub.flat_id).eq("billing_month",sub.billing_month).single();
+      var expectedAmt = billData.data ? billData.data.total_amount : sub.amount;
+      var paidAmt = sub.amount;
+      var variance = paidAmt - expectedAmt; // positive = excess, negative = shortfall
+      // Update bill based on variance
+      var billStatus, billArrears;
+      if(paidAmt >= expectedAmt){
+        billStatus = "paid"; billArrears = 0;
+      } else {
+        billStatus = "overdue"; billArrears = expectedAmt - paidAmt; // shortfall remains as arrears
+      }
       var billUpd = await supabase.from("bills")
-        .update({status:"paid",arrears:0})
+        .update({status:billStatus, arrears:billArrears, amount_paid:paidAmt, variance:variance})
         .eq("flat_id",sub.flat_id)
         .eq("billing_month",sub.billing_month);
-      console.log("[approve] bill update:", billUpd.error?"ERR:"+billUpd.error.message:"OK");
+      console.log("[approve] bill update:", billUpd.error?"ERR:"+billUpd.error.message:"OK", "status:"+billStatus, "variance:"+variance);
       if(billUpd.error){ props.showToast("❌ Bill update failed: "+billUpd.error.message); return; }
 
       // Step 2: Check for existing payment record
@@ -3395,8 +3428,13 @@ function ApprovalsTab(props) {
           {payments.length===0&&<div className="empty"><div className="empty-icon">💳</div><div>No payment submissions</div></div>}
           {pendingPays.length===0&&payments.length>0&&<div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--green)"}}>✅ All payments have been processed</div>}
           {payments.filter(function(p){return p.status==="pending";}).map(function(p){
+            // Get expected amount from flats data
+            var flatObj = (props.flats||[]).find(function(f){return f.id===p.flat_id;});
+            var expectedAmt = flatObj ? flatObj.monthly_charge : 0;
+            var variance = expectedAmt > 0 ? (p.amount - expectedAmt) : 0;
+            var hasVariance = expectedAmt > 0 && variance !== 0;
             return (
-              <div key={p.id} className="card" style={{marginBottom:12}}>
+              <div key={p.id} className="card" style={{marginBottom:12,border:hasVariance?"2px solid "+(variance>0?"#2D6A4F":"var(--red)"):""}}>
                 <div style={{padding:"12px 16px"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                     <div>
@@ -3408,13 +3446,27 @@ function ApprovalsTab(props) {
                       {p.notes&&<div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Note: {p.notes}</div>}
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{fontSize:16,fontWeight:700,color:"var(--green)"}}>{fmtRupee(p.amount)}</div>
+                      <div style={{fontSize:16,fontWeight:700,color:hasVariance?(variance>0?"var(--green)":"var(--red)"):"var(--green)"}}>{fmtRupee(p.amount)}</div>
+                      {hasVariance && (
+                        <div style={{fontSize:11,fontWeight:600,color:variance>0?"var(--green)":"var(--red)",marginTop:2}}>
+                          {variance>0?"↑ Excess +":"↓ Short "}{fmtRupee(Math.abs(variance))}
+                        </div>
+                      )}
+                      {expectedAmt>0 && <div style={{fontSize:10,color:"var(--muted)",marginTop:1}}>Expected: {fmtRupee(expectedAmt)}</div>}
                       <div className={"chip "+(p.status==="approved"?"paid":p.status==="rejected"?"overdue":"vacant")}
                         style={{background:p.status==="approved"?"#E8F5EE":p.status==="pending"?"#FFF9E6":"#FDEDEC",color:p.status==="approved"?"var(--green)":p.status==="pending"?"#7A5C00":"var(--red)"}}>
                         {p.status}
                       </div>
                     </div>
                   </div>
+                  {hasVariance && (
+                    <div style={{background:variance>0?"#E8F5EE":"#FDEDEC",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:12}}>
+                      {variance>0
+                        ? <span style={{color:"var(--green)"}}>✅ Overpaid by {fmtRupee(variance)} — will be credited as advance</span>
+                        : <span style={{color:"var(--red)"}}>⚠️ Shortfall of {fmtRupee(Math.abs(variance))} — balance will remain overdue after approval</span>
+                      }
+                    </div>
+                  )}
                   {p.screenshot_url&&<div style={{marginBottom:8}}><a href={p.screenshot_url} target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--gold)"}}>📷 View Screenshot</a></div>}
                   {p.status==="pending" && (
                     <div className="btn-grid" style={{gridTemplateColumns:"1fr 1fr"}}>
@@ -3647,6 +3699,7 @@ function ReportsTab(props) {
       {id:"ageing_report",   icon:"⏳", name:"Arrear Ageing Report",    desc:"0-30 / 31-60 / 61-90 / 90+ days overdue"},
       {id:"payment_mode",    icon:"💳", name:"Payment Mode Summary",    desc:"Cash / UPI / NEFT / Cheque reconciliation"},
       {id:"advance_payment", icon:"⏩", name:"Advance Payment Report",  desc:"Flats that have pre-paid future months"},
+      {id:"variance_report", icon:"⚖️", name:"Payment Variance Report", desc:"Short / excess payments — mismatches between paid and expected amounts"},
     ]},
     { cat:"Resident & Operational", reports:[
       {id:"agm_report",     icon:"📋", name:"Annual General Report",   desc:"Full year summary for AGM presentation"},
@@ -3755,6 +3808,23 @@ function ReportsTab(props) {
     else if (reportId==="advance_payment") {
       var bills2 = await supabase.from("bills").select("*").eq("status","paid").gt("billing_month",getCurrentMonth());
       data.rows = bills2.data || [];
+    }
+    else if (reportId==="variance_report") {
+      // Fetch all payments and join with bills to find mismatches
+      var [pays, bills3] = await Promise.all([
+        supabase.from("payments").select("*").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth).order("billing_month",{ascending:false}),
+        supabase.from("bills").select("flat_id,billing_month,total_amount,arrears,status").gte("billing_month",filters.fromMonth).lte("billing_month",filters.toMonth),
+      ]);
+      var billMap = {};
+      (bills3.data||[]).forEach(function(b){ billMap[b.flat_id+"|"+b.billing_month]=b; });
+      var varRows = (pays.data||[]).map(function(p){
+        var bill = billMap[p.flat_id+"|"+p.billing_month];
+        var expected = bill ? bill.total_amount : 0;
+        var variance = expected > 0 ? (p.amount_paid - expected) : 0;
+        return Object.assign({},p,{expected_amount:expected, variance:variance, bill_status:bill?bill.status:"unknown"});
+      }).filter(function(r){ return r.expected_amount>0 && r.variance!==0; });
+      data.rows = varRows;
+      data.allPayments = pays.data||[];
     }
     else if (reportId==="agm_report") {
       var fyFrom = filters.fromMonth, fyTo = filters.toMonth;
@@ -4302,6 +4372,74 @@ function ReportViewer(props) {
               , "Advance Payments")}
               {sorted.length===0&&<div className="empty"><div className="empty-icon">⏩</div><div>No advance payments found</div></div>}
               <div className="report-totals">Total Advance: <b style={{color:"var(--green)"}}>{fmtRupee(sorted.reduce(function(s,x){return s+x[1].total;},0))}</b></div>
+            </>);
+          })()}
+        </>)}
+
+        {/* 11b. Payment Variance Report */}
+        {id==="variance_report" && (<>
+          {Header("Payment Variance Report", monthLabel(props.filters.fromMonth)+" — "+monthLabel(props.filters.toMonth))}
+          <div className="report-filter-row">
+            <label className="rep-label">From</label>
+            <select className="rep-select" value={props.filters.fromMonth} onChange={function(e){props.setFilters(function(f){return Object.assign({},f,{fromMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <label className="rep-label">To</label>
+            <select className="rep-select" value={props.filters.toMonth} onChange={function(e){props.setFilters(function(f){return Object.assign({},f,{toMonth:e.target.value});});}}>
+              {ALL_MONTHS.map(function(m){return <option key={m} value={m}>{monthLabel(m)}</option>;})}
+            </select>
+            <button className="rep-apply-btn" onClick={props.onReload}>Apply</button>
+          </div>
+          {(function(){
+            var rows = d.rows||[];
+            var shortfalls = rows.filter(function(r){return r.variance<0;});
+            var excesses = rows.filter(function(r){return r.variance>0;});
+            var totalShortfall = shortfalls.reduce(function(s,r){return s+Math.abs(r.variance);},0);
+            var totalExcess = excesses.reduce(function(s,r){return s+r.variance;},0);
+            return (<>
+              {/* Summary cards */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,margin:"0 16px 16px"}}>
+                <div style={{background:"#FDEDEC",borderRadius:12,padding:"12px 14px"}}>
+                  <div style={{fontSize:11,color:"var(--red)",fontWeight:700,marginBottom:4}}>⬇ SHORTFALL</div>
+                  <div style={{fontSize:20,fontWeight:700,color:"var(--red)"}}>{fmtRupee(totalShortfall)}</div>
+                  <div style={{fontSize:11,color:"var(--red)",marginTop:2}}>{shortfalls.length} transaction{shortfalls.length!==1?"s":""}</div>
+                </div>
+                <div style={{background:"#E8F5EE",borderRadius:12,padding:"12px 14px"}}>
+                  <div style={{fontSize:11,color:"var(--green)",fontWeight:700,marginBottom:4}}>⬆ EXCESS</div>
+                  <div style={{fontSize:20,fontWeight:700,color:"var(--green)"}}>{fmtRupee(totalExcess)}</div>
+                  <div style={{fontSize:11,color:"var(--green)",marginTop:2}}>{excesses.length} transaction{excesses.length!==1?"s":""}</div>
+                </div>
+              </div>
+              {rows.length===0&&<div className="empty"><div className="empty-icon">⚖️</div><div>No payment variances found for this period</div></div>}
+              {shortfalls.length>0&&(<>
+                <div style={{padding:"8px 16px 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",color:"var(--red)",textTransform:"uppercase"}}>⬇ Shortfall Payments</div>
+                {Table(["Flat","Month","Paid","Expected","Shortfall","Status"],
+                  shortfalls.map(function(r){
+                    return <tr key={r.id}>
+                      <td>{r.flat_id}</td>
+                      <td>{monthLabel(r.billing_month)}</td>
+                      <td>{fmtRupee(r.amount_paid)}</td>
+                      <td>{fmtRupee(r.expected_amount)}</td>
+                      <td style={{color:"var(--red)",fontWeight:700}}>-{fmtRupee(Math.abs(r.variance))}</td>
+                      <td><span style={{color:r.bill_status==="paid"?"var(--green)":"var(--red)",fontWeight:600}}>{r.bill_status==="paid"?"Cleared":"Balance Due"}</span></td>
+                    </tr>;
+                  })
+                ,"Shortfall")}
+              </>)}
+              {excesses.length>0&&(<>
+                <div style={{padding:"8px 16px 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",color:"var(--green)",textTransform:"uppercase"}}>⬆ Excess Payments</div>
+                {Table(["Flat","Month","Paid","Expected","Excess"],
+                  excesses.map(function(r){
+                    return <tr key={r.id}>
+                      <td>{r.flat_id}</td>
+                      <td>{monthLabel(r.billing_month)}</td>
+                      <td>{fmtRupee(r.amount_paid)}</td>
+                      <td>{fmtRupee(r.expected_amount)}</td>
+                      <td style={{color:"var(--green)",fontWeight:700}}>+{fmtRupee(r.variance)}</td>
+                    </tr>;
+                  })
+                ,"Excess")}
+              </>)}
             </>);
           })()}
         </>)}
