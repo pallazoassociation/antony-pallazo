@@ -296,6 +296,7 @@ export default function App() {
   var [pendingCount,     setPendingCount]     = useState(0);
   var [selMonth, setSelMonth] = useState(getCurrentMonth());
   var [selFlat, setSelFlat] = useState(null);
+  var [showFlatContacts, setShowFlatContacts] = useState(false);
   var [filter, setFilter] = useState("all");
   var [search, setSearch] = useState("");
   var [toast, setToast] = useState(null);
@@ -786,39 +787,50 @@ export default function App() {
                     <option value="vacant">Vacant</option>
                   </select>
                 </div>
-                {/* Owner Contact Details */}
-                <div style={{margin:"10px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Owner Details</div>
-                {[["owner_name","Owner Name","e.g. John Doe"],["owner_phone","Owner Phone","10-digit mobile"],["owner_email","Owner Email","email@example.com"]].map(function(fld){
-                  return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
-                    <span className="ir-label">{fld[1]}</span>
-                    <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
-                      placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
-                      onBlur={async function(e){
-                        var val=e.target.value.trim();
-                        if(val===(selFlat[fld[0]]||"")) return;
-                        var upd={}; upd[fld[0]]=val||null;
-                        await supabase.from("flats").update(upd).eq("id",selFlat.id);
-                        setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
-                        setSelFlat(function(p){return Object.assign({},p,upd);});
-                        showToast("✅ "+fld[1]+" saved");
-                      }}/></div>;
-                })}
-                <div style={{margin:"10px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Tenant Details</div>
-                {[["tenant_name","Tenant Name","e.g. Jane Doe"],["tenant_phone","Tenant Phone","10-digit mobile"]].map(function(fld){
-                  return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
-                    <span className="ir-label">{fld[1]}</span>
-                    <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
-                      placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
-                      onBlur={async function(e){
-                        var val=e.target.value.trim();
-                        if(val===(selFlat[fld[0]]||"")) return;
-                        var upd={}; upd[fld[0]]=val||null;
-                        await supabase.from("flats").update(upd).eq("id",selFlat.id);
-                        setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
-                        setSelFlat(function(p){return Object.assign({},p,upd);});
-                        showToast("✅ "+fld[1]+" saved");
-                      }}/></div>;
-                })}
+                {/* Owner/Tenant contact — collapsible */}
+                <div style={{borderTop:"1px solid var(--border)",marginTop:8,paddingTop:8}}>
+                  <button onClick={function(){setShowFlatContacts(function(p){return !p;});}}
+                    style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"var(--muted)",fontWeight:600,width:"100%",textAlign:"left",padding:"2px 0",display:"flex",justifyContent:"space-between"}}>
+                    <span>👤 Contact Details</span>
+                    <span>{showFlatContacts?"▲":"▼"}</span>
+                  </button>
+                  {showFlatContacts && (
+                    <>
+                      <div style={{margin:"8px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Owner</div>
+                      {[["owner_name","Name","e.g. John Doe"],["owner_phone","Phone","10-digit mobile"],["owner_email","Email","email@example.com"]].map(function(fld){
+                        return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
+                          <span className="ir-label">{fld[1]}</span>
+                          <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
+                            placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
+                            onBlur={async function(e){
+                              var val=e.target.value.trim();
+                              if(val===(selFlat[fld[0]]||"")) return;
+                              var upd={}; upd[fld[0]]=val||null;
+                              await supabase.from("flats").update(upd).eq("id",selFlat.id);
+                              setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
+                              setSelFlat(function(p){return Object.assign({},p,upd);});
+                              showToast("✅ "+fld[1]+" saved");
+                            }}/></div>;
+                      })}
+                      <div style={{margin:"8px 0 4px",fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)"}}>Tenant</div>
+                      {[["tenant_name","Name","e.g. Jane Doe"],["tenant_phone","Phone","10-digit mobile"]].map(function(fld){
+                        return <div key={fld[0]} className="info-row" style={{alignItems:"center"}}>
+                          <span className="ir-label">{fld[1]}</span>
+                          <input style={{border:"none",background:"transparent",fontWeight:600,color:"var(--text)",textAlign:"right",width:"55%",outline:"none",fontSize:13}}
+                            placeholder={fld[2]} defaultValue={selFlat[fld[0]]||""}
+                            onBlur={async function(e){
+                              var val=e.target.value.trim();
+                              if(val===(selFlat[fld[0]]||"")) return;
+                              var upd={}; upd[fld[0]]=val||null;
+                              await supabase.from("flats").update(upd).eq("id",selFlat.id);
+                              setFlats(function(prev){return prev.map(function(f){return f.id===selFlat.id?Object.assign({},f,upd):f;});});
+                              setSelFlat(function(p){return Object.assign({},p,upd);});
+                              showToast("✅ "+fld[1]+" saved");
+                            }}/></div>;
+                      })}
+                    </>
+                  )}
+                </div>
               </div>
               {overdueByFlat[selFlat.id] && overdueByFlat[selFlat.id].length > 0 && (
                 <>
