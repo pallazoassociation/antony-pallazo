@@ -2082,7 +2082,9 @@ function InfoTab(props) {
       await supabase.from("bills").update({
         total_amount: c.newAmt,
         status: c.newStatus,
-        arrears: c.newArrears
+        arrears: c.newArrears,
+        amount_paid: c.paidAmt||0,
+        variance: c.paidAmt ? (c.paidAmt - c.newAmt) : 0
       }).eq("flat_id",c.flat_id).eq("billing_month",c.billing_month);
     }
     props.showToast("✅ Bills recalculated — "+recalcResult.length+" bills updated");
@@ -2168,11 +2170,17 @@ function InfoTab(props) {
                         <div style={{fontSize:12,fontWeight:600,marginBottom:6,color:"var(--red)"}}>{recalcResult.length} bills need updating:</div>
                         <div style={{maxHeight:160,overflowY:"auto",borderRadius:8,border:"1px solid var(--border)"}}>
                           {recalcResult.map(function(c){
+                            var isAdvancePaid = c.paidAmt > 0 && c.oldStatus==="paid";
                             return <div key={c.flat_id+c.billing_month} style={{display:"flex",justifyContent:"space-between",padding:"6px 10px",borderBottom:"1px solid var(--border)",fontSize:12}}>
-                              <span>Flat {c.flat_id} · {monthLabel(c.billing_month)}</span>
+                              <span>
+                                Flat {c.flat_id} · {monthLabel(c.billing_month)}
+                                {isAdvancePaid && <span style={{fontSize:10,background:"#FFF9E6",color:"var(--gold)",borderRadius:4,padding:"1px 5px",marginLeft:6,fontWeight:600}}>advance</span>}
+                              </span>
                               <span style={{color:c.newStatus==="paid"?"var(--green)":c.diff>0?"var(--red)":"var(--gold)",fontWeight:600}}>
                                 ₹{c.old}→₹{c.newAmt}
-                                {c.newStatus==="paid"?" ✅ stays paid":c.diff>0?" ⚠️ +₹"+c.diff+" owed":"  ✓ corrected"}
+                                {c.newStatus==="paid" ? " ✅ stays paid"
+                                  : c.paidAmt>0 ? " ⚠️ short ₹"+(c.newAmt-c.paidAmt)
+                                  : " +₹"+c.diff+" owed"}
                               </span>
                             </div>;
                           })}
