@@ -638,15 +638,17 @@ export default function App() {
   function getStatusForFlat(flatId) {
     var today = new Date();
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
-    // Future months ALWAYS show as pending — regardless of what's in DB
-    if (selMonth > curMonth) return "pending";
-    // Current month before 15th — unpaid shows as pending not overdue
     var b = getBillForFlat(flatId);
+    // ALWAYS show paid first — advance payments must show as paid even for future months
+    if (b && b.status === "paid") return "paid";
+    // Future months — not due yet
+    if (selMonth > curMonth) return "pending";
+    // No bill yet
     if (!b) {
       if (selMonth === curMonth && today.getDate() <= 15) return "pending";
       return "overdue";
     }
-    // Current month before 15th — don't show overdue yet
+    // Current month before 15th
     if (selMonth === curMonth && today.getDate() <= 15 && b.status === "overdue") return "pending";
     return b.status;
   }
@@ -4708,9 +4710,17 @@ function AdvancePaymentDashboard(props) {
   var today = new Date();
   var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
   // Find flats with future paid months
+  // Deduplicate allPayments — keep one entry per flat+month
+  var seenPay = {};
+  var uniquePayments = (props.allPayments||[]).filter(function(p){
+    var key = p.flat_id+"|"+p.billing_month;
+    if(seenPay[key]) return false;
+    seenPay[key] = true;
+    return true;
+  });
   var advanceFlats = [];
   (props.flats||[]).forEach(function(f){
-    var futurePaid = (props.allPayments||[]).filter(function(p){
+    var futurePaid = uniquePayments.filter(function(p){
       return p.flat_id===f.id && p.billing_month > curMonth;
     }).sort(function(a,b){return a.billing_month.localeCompare(b.billing_month);});
     if(futurePaid.length>0) advanceFlats.push({flat:f, months:futurePaid});
