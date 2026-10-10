@@ -524,9 +524,15 @@ export default function App() {
       var variance = amt - charge;
       var billStatus = amt >= charge ? "paid" : "overdue";
       var billArrears = amt >= charge ? 0 : charge - amt;
-      await supabase.from("bills")
-        .update({status:billStatus, arrears:billArrears, amount_paid:amt, variance:variance})
-        .eq("flat_id",flat.id).eq("billing_month",selMonth);
+      // Use UPSERT — creates bill if it doesn't exist (e.g. future/advance month)
+      var y2 = parseInt(selMonth.slice(0,4)), m2 = parseInt(selMonth.slice(5,7));
+      var dueM2 = m2===12?"01":String(m2+1).padStart(2,"0");
+      var dueY2 = m2===12?y2+1:y2;
+      await supabase.from("bills").upsert({
+        flat_id:flat.id, billing_month:selMonth,
+        total_amount:charge, due_date:dueY2+"-"+dueM2+"-10",
+        status:billStatus, arrears:billArrears, amount_paid:amt, variance:variance
+      }, {onConflict:"flat_id,billing_month"});
       // Show variance toast
       if(variance < 0){
         showToast("✅ Payment saved — ⚠️ Shortfall of ₹"+Math.abs(variance).toLocaleString("en-IN")+" remains overdue");
@@ -576,11 +582,9 @@ export default function App() {
         var dueY = m===12?y+1:y;
         await supabase.from("bills").upsert(
           { flat_id:flat.id, billing_month:bm, total_amount:charge, arrears:0,
-            due_date:dueY+"-"+dueM+"-10", status:"paid" },
+            due_date:dueY+"-"+dueM+"-10", status:"paid", amount_paid:charge, variance:0 },
           { onConflict:"flat_id,billing_month" }
         );
-        await supabase.from("bills").update({status:"paid",arrears:0})
-          .eq("flat_id",flat.id).eq("billing_month",bm);
       }
       showToast("✅ Advance payment saved for "+payForm.months.length+" month(s)!");
     }
@@ -1379,15 +1383,20 @@ function OverdueTab(props) {
         await supabase.from("payments").insert({flat_id:payingMonth.flat_id,billing_month:payingMonth.month,
           amount_paid:amt,mode:payForm.mode,reference:payForm.ref||null,payment_date:payForm.payDate});
       }
-      // Update bill with variance tracking
+      // Update/create bill with variance tracking (upsert handles missing future month bills)
       var variance = amt - payingMonth.amount;
       var isFullPaid = amt >= payingMonth.amount;
-      await supabase.from("bills").update({
+      var pm = payingMonth.month;
+      var py = parseInt(pm.slice(0,4)), pmo = parseInt(pm.slice(5,7));
+      var pdueM = pmo===12?"01":String(pmo+1).padStart(2,"0");
+      var pdueY = pmo===12?py+1:py;
+      await supabase.from("bills").upsert({
+        flat_id: payingMonth.flat_id, billing_month: pm,
+        total_amount: payingMonth.amount, due_date: pdueY+"-"+pdueM+"-10",
         status: isFullPaid ? "paid" : "overdue",
         arrears: isFullPaid ? 0 : payingMonth.amount - amt,
-        amount_paid: amt,
-        variance: variance
-      }).eq("flat_id",payingMonth.flat_id).eq("billing_month",payingMonth.month);
+        amount_paid: amt, variance: variance
+      }, {onConflict:"flat_id,billing_month"});
       // Toast with variance info
       if(variance < 0){
         props.showToast("✅ Recorded — ⚠️ Shortfall ₹"+Math.abs(variance).toLocaleString("en-IN")+" still overdue");
