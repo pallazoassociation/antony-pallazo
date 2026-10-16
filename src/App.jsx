@@ -623,7 +623,10 @@ export default function App() {
   var expected   = mSummary.expected   || flats.reduce(function(s,f){return s+f.monthly_charge;},0);
   var paidCnt    = mSummary.paid_count   || 0;
   var overdCnt   = mSummary.overdue_count || 0;
-  var partCnt    = 0;
+  // Partial = overdue bills that have some payment (arrears < total_amount)
+  var partCnt    = monthBillsData.filter(function(b){
+    return b.status==="overdue" && b.arrears>0 && b.arrears<b.total_amount;
+  }).length;
   var collPct    = expected > 0 ? Math.round((collected/expected)*100) : 0;
 
   // ── Month bills: 30 rows from flat_month_status view ─────────
@@ -643,18 +646,46 @@ export default function App() {
     var today = new Date();
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
     var b = getBillForFlat(flatId);
-    // ALWAYS show paid first — advance payments must show as paid even for future months
-    if (b && b.status === "paid") return "paid";
-    // Future months — not due yet
-    if (selMonth > curMonth) return "pending";
-    // No bill yet
-    if (!b) {
-      if (selMonth === curMonth && today.getDate() <= 15) return "pending";
-      return "overdue";
+    var DUE_DAY = 10; // Due by 10th of every month
+
+    // ── FUTURE MONTHS ──────────────────────────────
+    if (selMonth > curMonth) {
+      if (b && b.status === "paid") return "advance_paid";
+      return "not_due_yet";
     }
-    // Current month before 15th
-    if (selMonth === curMonth && today.getDate() <= 15 && b.status === "overdue") return "pending";
-    return b.status;
+
+    // ── CURRENT & PAST MONTHS ──────────────────────
+    if (b) {
+      if (b.status === "paid") return "paid";
+      // Partially paid: has arrears but also has some payment (arrears < total)
+      if (b.arrears > 0 && b.arrears < b.total_amount) return "partial";
+    }
+
+    // Current month — check if still within due date
+    if (selMonth === curMonth && today.getDate() <= DUE_DAY) return "due";
+
+    // Past month or current month after 10th — overdue
+    return "overdue";
+  }
+
+  // ── Status display helpers ────────────────────────────────────
+  function statusLabel(st) {
+    return {paid:"Paid", overdue:"Overdue", due:"Due", partial:"Partially Paid",
+            advance_paid:"Advance Paid", not_due_yet:"Not Due Yet", pending:"Not Due Yet"}[st] || st;
+  }
+  function statusColor(st) {
+    return {paid:"var(--green)", overdue:"var(--red)", due:"#D4A853",
+            partial:"#E07B20", advance_paid:"#2563EB", not_due_yet:"var(--muted)",
+            pending:"var(--muted)"}[st] || "var(--muted)";
+  }
+  function statusBg(st) {
+    return {paid:"#E8F5EE", overdue:"#FDEDEC", due:"#FFF9E6",
+            partial:"#FEF3E8", advance_paid:"#EFF6FF", not_due_yet:"var(--bg)",
+            pending:"var(--bg)"}[st] || "var(--bg)";
+  }
+  function statusIcon(st) {
+    return {paid:"✅", overdue:"🔴", due:"🟡", partial:"🟠",
+            advance_paid:"🔵", not_due_yet:"⚪", pending:"⚪"}[st] || "⚪";
   }
 
   // ── Overdue: from overdue_summary view (only overdue rows) ────
@@ -771,7 +802,7 @@ export default function App() {
               <div className="amt-block">
                 <div className="ab-label">Total Outstanding (All Time)</div>
                 <div className="ab-value">{fmtRupee(totalOverdueAmt && overdueByFlat[selFlat.id] ? overdueByFlat[selFlat.id].reduce(function(s,x){return s+x.amount;},0) : 0)}</div>
-                <div className="ab-detail">{monthLabel(selMonth)} charge: {fmtRupee(selFlat.monthly_charge)} · Status: {getStatusForFlat(selFlat.id)}</div>
+                <div className="ab-detail">{monthLabel(selMonth)} · {statusIcon(getStatusForFlat(selFlat.id))} {statusLabel(getStatusForFlat(selFlat.id))}</div>
               </div>
               <div className="card mb14">
                 {[["Flat",selFlat.flat_no],["Type",selFlat.bhk_type],["Block",selFlat.block],["Monthly Charge",fmtRupee(selFlat.monthly_charge)]].map(function(row){
@@ -851,7 +882,7 @@ export default function App() {
               <div className="btn-grid">
                 <button className="btn btn-primary" onClick={function(){setPayModal(true);}}>💸 Record Payment</button>
 
-                {getStatusForFlat(selFlat.id) === "paid" ? (
+                {(getStatusForFlat(selFlat.id) === "paid" || getStatusForFlat(selFlat.id) === "advance_paid") ? (
                   <>
                   {/* Already paid — show Revert and Edit options */}
                   <button className="btn btn-secondary" style={{borderColor:"var(--red)",color:"var(--red)"}}
@@ -1245,16 +1276,27 @@ function HomeTab(props) {
         <div className="card">
           <div style={{padding:"13px 16px 11px"}}>
             <div className="coll-row"><span>{monthLabel(props.selMonth)} Collection</span><b>{fmtRupee(props.collected)} / {fmtRupee(props.expected)}</b></div>
-            <div className="multi-bar">
-              <div className="bar-paid"    style={{width:props.monthBills.length>0?(props.paidCnt/props.monthBills.length*100)+"%":"0%"}}/>
-              <div className="bar-partial" style={{width:props.monthBills.length>0?(props.partCnt/props.monthBills.length*100)+"%":"0%"}}/>
-              <div className="bar-overdue" style={{width:props.monthBills.length>0?(props.overdCnt/props.monthBills.length*100)+"%":"0%"}}/>
-            </div>
-            <div className="bar-legend">
-              {[["#2D7A4F",props.paidCnt+" Paid"],["#D4691E",props.partCnt+" Partial"],["#C0392B",props.overdCnt+" Overdue"]].map(function(x){
-                return <div key={x[1]} className="bar-dot"><div className="dot" style={{background:x[0]}}/>{x[1]}</div>;
-              })}
-            </div>
+            {(function(){
+              var total = props.monthBills.length||1;
+              var advCnt = (props.monthBills||[]).filter(function(b){return b.status==="paid"&&b.billing_month>props.selMonth;}).length;
+              var dueCnt = (props.monthBills||[]).filter(function(b){
+                var today=new Date(); return b.status==="overdue"&&b.billing_month===props.selMonth&&today.getDate()<=10;
+              }).length;
+              return (<>
+                <div className="multi-bar">
+                  <div className="bar-paid"    style={{width:(props.paidCnt/total*100)+"%"}}/>
+                  <div style={{height:"100%",background:"#2563EB",width:(advCnt/total*100)+"%",transition:"width .4s"}}/>
+                  <div className="bar-partial" style={{width:(props.partCnt/total*100)+"%"}}/>
+                  <div style={{height:"100%",background:"#D4A853",width:(dueCnt/total*100)+"%",transition:"width .4s"}}/>
+                  <div className="bar-overdue" style={{width:(props.overdCnt/total*100)+"%"}}/>
+                </div>
+                <div className="bar-legend">
+                  {[["#2D7A4F",props.paidCnt+" Paid"],["#2563EB",advCnt+" Advance"],["#D4691E",props.partCnt+" Partial"],["#D4A853",dueCnt+" Due"],["#C0392B",props.overdCnt+" Overdue"]].filter(function(x){return parseInt(x[1])>0;}).map(function(x){
+                    return <div key={x[1]} className="bar-dot"><div className="dot" style={{background:x[0]}}/>{x[1]}</div>;
+                  })}
+                </div>
+              </>);
+            })()}
           </div>
         </div>
       </div>
@@ -1329,16 +1371,19 @@ function FlatsTab(props) {
             return (
               <div key={f.id} className="flat-item" onClick={function(){props.setSelFlat(f);}}>
                 <div className="fi-left">
-                  <div className={"fi-avatar "+(displaySt==="paid"?"paid":displaySt==="overdue"?"overdue":"vacant")}>{f.flat_no}</div>
+                  <div className={"fi-avatar "+(displaySt==="paid"||displaySt==="advance_paid"?"paid":displaySt==="overdue"||displaySt==="partial"?"overdue":"vacant")}>{f.flat_no}</div>
                   <div>
                     <div className="fi-name">Flat {f.flat_no} <span style={{fontSize:11,color:"var(--muted)",fontWeight:400}}>· {f.bhk_type}</span></div>
                     <div className="fi-meta">Block {f.block} · {f.occupancy==="owner"?"Owner Occupied":"Rented"}</div>
                   </div>
                 </div>
                 <div className="fi-right">
-                  {displaySt==="paid" && <><div className="fi-amount paid">{fmtRupee(bill?bill.total_amount:f.monthly_charge)}</div><div className="chip paid">Paid</div></>}
-                  {displaySt==="overdue" && <><div className="fi-amount overdue">{fmtRupee(bill&&bill.arrears?bill.arrears:f.monthly_charge)}</div><div className="chip overdue">Overdue</div></>}
-                  {displaySt==="pending" && <><div className="fi-amount" style={{color:"var(--muted)"}}>{fmtRupee(f.monthly_charge)}</div><div className="chip vacant">Not Due Yet</div></>}
+                  <div className="fi-amount" style={{color:statusColor(displaySt)}}>
+                    {fmtRupee(displaySt==="overdue"||displaySt==="partial"?(bill&&bill.arrears?bill.arrears:f.monthly_charge):f.monthly_charge)}
+                  </div>
+                  <div className="chip" style={{background:statusBg(displaySt),color:statusColor(displaySt),border:"1.5px solid "+statusColor(displaySt),fontWeight:600}}>
+                    {statusIcon(displaySt)} {statusLabel(displaySt)}
+                  </div>
                 </div>
               </div>
             );
