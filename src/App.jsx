@@ -396,6 +396,8 @@ export default function App() {
         supabase.from("account_settings").select("*"),                                                   // 8
         supabase.from("payments").select("flat_id,billing_month,amount_paid,mode,reference,payment_date").order("payment_date",{ascending:false}), // 9
       ]);
+      // Log which query failed (supabase returns {error} instead of throwing)
+      results.forEach(function(r,i){ if (r && r.error) console.error("loadData query #"+i+" failed:", r.error.message); });
       if (results[0].data)  setFlats(results[0].data);
       if (results[1].data)  setMonthlySummaries(results[1].data);
       if (results[2].data)  setOverdueBills(results[2].data);
@@ -601,6 +603,9 @@ export default function App() {
     if (s.temp) { localStorage.setItem("pallazo_temp_session", JSON.stringify(s)); setUserProfile(s.profile); }
     else loadUserProfile(s.user.id);
     setSession(s);
+    // Admin temp sessions skip the [session] effect, so start loading now
+    // instead of waiting for the 8-second safety timer.
+    if (s.temp && s.profile && s.profile.role === "admin") loadData();
   }}/>;
 
   // ── Resident portal (owner/tenant) ────────────────────────────
