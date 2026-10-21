@@ -267,6 +267,26 @@ function getStatus(bill) {
   return bill.status;
 }
 
+// ── Payment status display helpers (module scope: used by several components) ──
+function statusLabel(st) {
+  return {paid:"Paid", overdue:"Overdue", due:"Due", partial:"Partially Paid",
+          advance_paid:"Advance Paid", not_due_yet:"Not Due Yet", pending:"Not Due Yet"}[st] || st;
+}
+function statusColor(st) {
+  return {paid:"var(--green)", overdue:"var(--red)", due:"#D4A853",
+          partial:"#E07B20", advance_paid:"#2563EB", not_due_yet:"var(--muted)",
+          pending:"var(--muted)"}[st] || "var(--muted)";
+}
+function statusBg(st) {
+  return {paid:"#E8F5EE", overdue:"#FDEDEC", due:"#FFF9E6",
+          partial:"#FEF3E8", advance_paid:"#EFF6FF", not_due_yet:"var(--bg)",
+          pending:"var(--bg)"}[st] || "var(--bg)";
+}
+function statusIcon(st) {
+  return {paid:"✅", overdue:"🔴", due:"🟡", partial:"🟠",
+          advance_paid:"🔵", not_due_yet:"⚪", pending:"⚪"}[st] || "⚪";
+}
+
 export default function App() {
   var [session, setSession] = useState(null);
   var [userProfile, setUserProfile] = useState(null);
@@ -673,26 +693,6 @@ export default function App() {
     return "overdue";
   }
 
-  // ── Status display helpers ────────────────────────────────────
-  function statusLabel(st) {
-    return {paid:"Paid", overdue:"Overdue", due:"Due", partial:"Partially Paid",
-            advance_paid:"Advance Paid", not_due_yet:"Not Due Yet", pending:"Not Due Yet"}[st] || st;
-  }
-  function statusColor(st) {
-    return {paid:"var(--green)", overdue:"var(--red)", due:"#D4A853",
-            partial:"#E07B20", advance_paid:"#2563EB", not_due_yet:"var(--muted)",
-            pending:"var(--muted)"}[st] || "var(--muted)";
-  }
-  function statusBg(st) {
-    return {paid:"#E8F5EE", overdue:"#FDEDEC", due:"#FFF9E6",
-            partial:"#FEF3E8", advance_paid:"#EFF6FF", not_due_yet:"var(--bg)",
-            pending:"var(--bg)"}[st] || "var(--bg)";
-  }
-  function statusIcon(st) {
-    return {paid:"✅", overdue:"🔴", due:"🟡", partial:"🟠",
-            advance_paid:"🔵", not_due_yet:"⚪", pending:"⚪"}[st] || "⚪";
-  }
-
   // ── Overdue: from overdue_summary view (only overdue rows) ────
   var overdueByFlat = {};
   overdueBills.forEach(function(b) {
@@ -945,7 +945,7 @@ export default function App() {
                 <button className="btn btn-secondary" onClick={function(){
                   var phone = selFlat.owner_phone||"";
                   var ai = aptInfo||{};
-                  var overdueMonths = (props.overdueByFlat||{})[selFlat.id]||[];
+                  var overdueMonths = (overdueByFlat||{})[selFlat.id]||[];
                   if(overdueMonths.length===0){ showToast("No overdue months for this flat"); return; }
                   var monthList = overdueMonths.map(function(m){return "• "+monthLabel(m.month)+" — ₹"+m.amount.toLocaleString("en-IN");}).join("\n");
                   var total = overdueMonths.reduce(function(s,m){return s+m.amount;},0);
@@ -2917,11 +2917,10 @@ function ResidentPortal(props) {
                       if(r[1].data){var ai={};r[1].data.forEach(function(x){ai[x.key]=x.value;});setResAptInfo(ai);}
                       if(r[2].data) setOwnerEB(r[2].data);
                       if(r[3].data) setOwnerStaff(r[3].data);
-                      setResInfoLoaded(true);
                     });
                   }}
                   readOnly/>
-              : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs}/>
+              : <TenantInfoTab aptInfo={resAptInfo} maintenanceSlabs={resSlabs} flatCharge={(bills.find(function(b){return b.total_amount>0;})||{}).total_amount||0}/>
             }
           </div>
         </div>
@@ -4650,7 +4649,7 @@ function TenantInfoTab(props) {
         {/* Quick UPI Pay button */}
         {(function(){
           var upiId = aptInfo.upi_id||"pallazoapartmentresidentswelfareassociationmedavakkam.ibz@icici";
-          var charge = curSlab ? (bhk==="1BHK"?curSlab.charge_1bhk:bhk==="2BHK"?curSlab.charge_2bhk:curSlab.charge_3bhk) : 0;
+          var charge = props.flatCharge || 0;
           var upiUrl = "upi://pay?pa="+encodeURIComponent(upiId)+"&pn="+encodeURIComponent("Antony Pallazo")+"&am="+charge+"&cu=INR&tn="+encodeURIComponent("Maintenance Payment");
           return charge>0 ? (
             <a href={upiUrl} style={{display:"block",background:"#1A9C3E",color:"#FFF",textAlign:"center",padding:"13px",borderRadius:10,fontWeight:700,fontSize:15,textDecoration:"none",marginTop:12}}>
