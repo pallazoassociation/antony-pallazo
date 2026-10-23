@@ -90,9 +90,8 @@ function LoginScreen(props) {
       }
       // Super admin account — credentials stored in DB, changeable
       var sa = await supabase.from("super_admin_credentials").select("*").eq("id",1).single();
-      var defaultUser = sa.data ? sa.data.username : "admin";
-      var defaultPass = sa.data ? sa.data.password_hash : "Admin@2024";
-      if (phone===defaultUser && password===defaultPass) {
+      if (sa.error || !sa.data) { setErr("Could not verify admin credentials. Check your connection and try again."); setBusy(false); return; }
+      if (phone===sa.data.username && password===sa.data.password_hash) {
         props.onLogin({user:{id:"super-admin"},temp:true,profile:{role:"admin",name:"Committee Admin (Super Admin)",flat_id:null,id:"super-admin",is_super_admin:true}});
         return;
       }
@@ -1190,8 +1189,8 @@ function AdminChangePasswordModal(props) {
     if (isSuperAdmin) {
       // Verify against super_admin_credentials table
       var sa = await supabase.from("super_admin_credentials").select("*").eq("id",1).single();
-      var curPass = sa.data ? sa.data.password_hash : "Admin@2024";
-      if (form.current !== curPass) { setErr("Current password is incorrect"); setSaving(false); return; }
+      if (sa.error || !sa.data) { setErr("Could not verify the current admin password. Check your connection and try again."); setSaving(false); return; }
+      if (form.current !== sa.data.password_hash) { setErr("Current password is incorrect"); setSaving(false); return; }
       var upd = await supabase.from("super_admin_credentials").upsert({id:1, username:"admin", password_hash:form.next});
       setSaving(false);
       if (upd.error) { setErr(upd.error.message); return; }
@@ -3190,7 +3189,7 @@ function ApprovalsTab(props) {
     var rq = supabase.from("registration_requests").select("*").order("created_at",{ascending:false});
     var pq = supabase.from("payment_submissions").select("*").order("created_at",{ascending:false});
     // Simple select without join - avoids empty results from failed joins
-    var uq = supabase.from("resident_users").select("*").order("flat_id").order("role");
+    var uq = supabase.from("resident_users").select("id,flat_id,name,phone,role,status,created_at").order("flat_id").order("role");
     // Owner mode — filter to own flat tenants only
     if (props.ownerFlatId) {
       rq = rq.eq("flat_id", props.ownerFlatId).eq("role","tenant");
