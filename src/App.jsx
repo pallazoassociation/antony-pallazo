@@ -52,6 +52,175 @@ var ALL_MONTHS = buildMonthList();
 
 var ALL_FLAT_IDS = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
+// ── Supabase Auth bridge (stage 3) ─────────────────────────────────────────
+// Residents and admins are mirrored as Supabase Auth accounts so the database can
+// later tell WHO is asking. Until the old stored-password login is retired, every
+// step here is best-effort: if anything fails, the app falls back to the old behaviour.
+var AUTH_EMAIL_DOMAIN = "pallazo.invalid"; // must match AUTH_EMAIL_DOMAIN in api/auth.js
+function authEmail(identifier) { return String(identifier || "").trim().toLowerCase() + "@" + AUTH_EMAIL_DOMAIN; }
+
+// Tables/views the app reads at startup — a signed-in (authenticated) session must reach all of them
+var AUTH_PROBE_TABLES = ["flats","bills","payments","payment_submissions","notifications","expenses","notices",
+  "other_income","corpus_payments","fixed_deposits","account_settings","maintenance_slabs","apartment_info",
+  "eb_details","employee_details","monthly_summary","overdue_summary","flat_month_status","live_bank_balance",
+  "pending_approvals_summary"];
+
+async function callAuthApi(body, token) {
+  try {
+    var headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = "Bearer " + token;
+    var res = await fetch("/api/auth", { method: "POST", headers: headers, body: JSON.stringify(body) });
+    var json = {};
+    try { json = await res.json(); } catch (e) {}
+    return { ok: res.ok && json.ok === true, status: res.status, body: json };
+  } catch (e) { return { ok: false, status: 0, body: {} }; }
+}
+
+async function endAuthSession() {
+  try { await supabase.auth.signOut({ scope: "local" }); } catch (e) {} // local = this device only
+}
+
+// If the signed-in role cannot read everything the anonymous role can, don't use it (self-protection)
+async function authSessionUsable() {
+  var results = await Promise.all(AUTH_PROBE_TABLES.map(function(t) { return supabase.from(t).select("*").limit(1); }));
+  var bad = AUTH_PROBE_TABLES.filter(function(t, i) { return results[i].error; });
+  if (bad.length) console.warn("Auth session not used — no access to:", bad.join(", "));
+  return bad.length === 0;
+}
+
+// Returns true when this device now holds a valid Auth session for the identity.
+// legacyOk = the old stored-password check already passed (allows creating the Auth account on first use).
+async function establishAuthSession(identifier, password, legacyOk, kind) {
+  try {
+    var email = authEmail(identifier);
+    var s = await supabase.auth.signInWithPassword({ email: email, password: password });
+    if ((s.error || !s.data || !s.data.session) && legacyOk) {
+      var made = await callAuthApi({ action: "ensure-account", kind: kind, identifier: identifier, password: password });
+      if (made.ok) s = await supabase.auth.signInWithPassword({ email: email, password: password });
+    }
+    if (s.error || !s.data || !s.data.session) return false;
+    if (!(await authSessionUsable())) { await endAuthSession(); return false; }
+    return true;
+  } catch (e) { return false; }
+}
+
+// Keep the user's own Auth password in step after they change it (only possible while signed in)
+async function syncOwnAuthPassword(newPassword) {
+  try {
+    var cur = await supabase.auth.getSession();
+    if (cur.data && cur.data.session) {
+      var u = await supabase.auth.updateUser({ password: newPassword });
+      if (u.error) console.warn("Auth password sync failed:", u.error.message);
+    }
+  } catch (e) { console.warn("Auth password sync failed:", e); }
+}
+
+// Admin action: ask the server to re-sync one resident's Auth account (needs the admin's own Auth session)
+async function syncAccountFor(residentId) {
+  try {
+    var cur = await supabase.auth.getSession();
+    var token = cur.data && cur.data.session ? cur.data.session.access_token : null;
+    if (!token || !residentId) return false;
+    var r = await callAuthApi({ action: "sync-account", resident_id: residentId }, token);
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+// ── Admin panel: who has a secure login account, and create the missing ones ──
+function describeApiFailure(r) {
+  if (r.status === 0) return "Could not reach the server function (/api/auth). It may not be deployed yet.";
+  if (r.status === 401) return "Your login has expired — please log out and log in again.";
+  if (r.status === 403) return "Only admins can use this.";
+  if (r.status === 503) return "The server function is not fully set up (check the service key in Vercel).";
+  return "Something went wrong (" + r.status + "). " + ((r.body && r.body.detail) || "");
+}
+
+function AuthAccountsSheet(props) {
+  var [loading, setLoading] = useState(true);
+  var [token, setToken] = useState(null);
+  var [report, setReport] = useState(null);
+  var [error, setError] = useState("");
+  var [busy, setBusy] = useState(false);
+  var [result, setResult] = useState(null);
+
+  async function load(silent) {
+    if (!silent) setLoading(true);
+    setError("");
+    try {
+      var cur = await supabase.auth.getSession();
+      var t = cur.data && cur.data.session ? cur.data.session.access_token : null;
+      setToken(t);
+      if (t) {
+        var r = await callAuthApi({ action: "status" }, t);
+        if (r.ok) setReport(r.body); else setError(describeApiFailure(r));
+      }
+    } catch (e) { setError("Could not check: " + (e.message || e)); }
+    setLoading(false);
+  }
+  useEffect(function() { load(false); }, []);
+
+  async function createMissing() {
+    setBusy(true); setResult(null);
+    var r = await callAuthApi({ action: "sync-all" }, token);
+    if (r.ok) setResult(r.body); else setError(describeApiFailure(r));
+    await load(true);
+    setBusy(false);
+  }
+
+  var missing = report ? report.missing : [];
+  var allDone = report && missing.length === 0 && report.shared_admin_ready !== false;
+  return (
+    <div className="overlay" onClick={props.onClose}>
+      <div className="sheet" onClick={function(e){e.stopPropagation();}}>
+        <div className="sheet-head">
+          <div><div className="sheet-title">🔐 Login accounts</div><div className="sheet-sub">Secure sign-in for residents</div></div>
+          <button className="close-btn" onClick={props.onClose}>✕</button>
+        </div>
+        <div className="sheet-body">
+          <div style={{fontSize:12,color:"var(--muted)",marginBottom:12,lineHeight:1.5}}>
+            Each person's account is created automatically the first time they log in. Use this to create the rest in one go. Existing accounts are never changed.
+          </div>
+          {loading && <div style={{textAlign:"center",padding:"20px 0",color:"var(--muted)"}}>Checking…</div>}
+          {!loading && !token && (
+            <div style={{background:"#FFF9E6",border:"1.5px solid #D4A853",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#7A5C00",lineHeight:1.5}}>
+              This device is using the older sign-in, so this panel can't talk to the server. Log out, log in again, then reopen it. If it still shows this, the server function may not be set up yet.
+            </div>
+          )}
+          {!loading && error && <div style={{background:"#FDEDEC",borderRadius:10,padding:"10px 12px",fontSize:12,color:"var(--red)",marginBottom:10}}>{error}</div>}
+          {!loading && report && (<>
+            <div style={{background:"var(--bg)",borderRadius:12,padding:"14px",textAlign:"center",marginBottom:12}}>
+              <div style={{fontSize:26,fontWeight:700}}>{report.ready} of {report.total}</div>
+              <div style={{fontSize:12,color:"var(--muted)"}}>residents have a secure login account</div>
+              <div style={{fontSize:12,marginTop:6}}>Shared admin login: {report.shared_admin_ready === null ? "—" : report.shared_admin_ready ? "✅ ready" : "⏳ not created yet"}</div>
+            </div>
+            {missing.length > 0 && (
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:"var(--muted)",marginBottom:6}}>Not ready yet</div>
+                {missing.map(function(m, i) {
+                  return <div key={i} style={{fontSize:13,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                    Flat {m.flat_id} · {m.name}{m.reason ? <span style={{color:"var(--red)",fontSize:11}}> — {m.reason}</span> : null}
+                  </div>;
+                })}
+              </div>
+            )}
+            {allDone && <div style={{background:"#E8F5EE",borderRadius:10,padding:"10px 12px",fontSize:13,color:"var(--green)",marginBottom:12}}>✅ Everyone is ready.</div>}
+            {result && (
+              <div style={{background:"var(--bg)",borderRadius:10,padding:"10px 12px",fontSize:12,marginBottom:12}}>
+                <div style={{fontWeight:700}}>Created {result.created} account{result.created === 1 ? "" : "s"}.</div>
+                {(result.failed || []).map(function(f, i) {
+                  return <div key={i} style={{color:"var(--red)",marginTop:4}}>Flat {f.flat_id} · {f.name} — {f.reason}</div>;
+                })}
+              </div>
+            )}
+            <button className="btn btn-success" onClick={createMissing} disabled={busy || allDone}>{busy ? "Working…" : "Create missing accounts"}</button>
+          </>)}
+          <button className="btn btn-secondary mt10" onClick={props.onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen(props) {
   var [loginRole, setLoginRole] = useState("");
   var [flatId,    setFlatId]    = useState("");
@@ -84,16 +253,22 @@ function LoginScreen(props) {
       // Try resident admin group first
       var r = await supabase.from("resident_users").select("*,admin_group(*)").eq("phone",phone).eq("status","active").single();
       if (!r.error && r.data && r.data.admin_group && r.data.admin_group.length>0) {
-        if (r.data.password_hash!==password) { setErr("Incorrect password"); setBusy(false); return; }
-        props.onLogin({user:{id:r.data.id},temp:true,profile:{role:"admin",name:r.data.name,flat_id:r.data.flat_id,id:r.data.id,is_super_admin:r.data.admin_group[0].is_super_admin}});
+        var legacyOkA = r.data.password_hash===password;
+        var authOkA = await establishAuthSession(phone, password, legacyOkA, "resident");
+        if (!legacyOkA && !authOkA) { setErr("Incorrect password"); setBusy(false); return; }
+        props.onLogin({user:{id:r.data.id},temp:true,authBacked:authOkA,profile:{role:"admin",name:r.data.name,flat_id:r.data.flat_id,id:r.data.id,is_super_admin:r.data.admin_group[0].is_super_admin}});
         return;
       }
       // Super admin account — credentials stored in DB, changeable
       var sa = await supabase.from("super_admin_credentials").select("*").eq("id",1).single();
       if (sa.error || !sa.data) { setErr("Could not verify admin credentials. Check your connection and try again."); setBusy(false); return; }
-      if (phone===sa.data.username && password===sa.data.password_hash) {
-        props.onLogin({user:{id:"super-admin"},temp:true,profile:{role:"admin",name:"Committee Admin (Super Admin)",flat_id:null,id:"super-admin",is_super_admin:true}});
-        return;
+      if (phone===sa.data.username) {
+        var legacyOkS = password===sa.data.password_hash;
+        var authOkS = await establishAuthSession(sa.data.username, password, legacyOkS, "super");
+        if (legacyOkS || authOkS) {
+          props.onLogin({user:{id:"super-admin"},temp:true,authBacked:authOkS,profile:{role:"admin",name:"Committee Admin (Super Admin)",flat_id:null,id:"super-admin",is_super_admin:true}});
+          return;
+        }
       }
       setErr("Admin account not found or not authorised"); setBusy(false); return;
     }
@@ -101,8 +276,10 @@ function LoginScreen(props) {
     if (!phone||!password)   { setErr("Enter phone and password"); setBusy(false); return; }
     var r2 = await supabase.from("resident_users").select("*").eq("flat_id",flatId).eq("phone",phone).eq("status","active").single();
     if (r2.error||!r2.data) { setErr("Account not found. Please register."); setBusy(false); return; }
-    if (r2.data.password_hash!==password) { setErr("Incorrect password"); setBusy(false); return; }
-    props.onLogin({user:{id:r2.data.id},temp:true,profile:{role:r2.data.role,name:r2.data.name,flat_id:flatId,id:r2.data.id}});
+    var legacyOkR = r2.data.password_hash===password;
+    var authOkR = await establishAuthSession(phone, password, legacyOkR, "resident");
+    if (!legacyOkR && !authOkR) { setErr("Incorrect password"); setBusy(false); return; }
+    props.onLogin({user:{id:r2.data.id},temp:true,authBacked:authOkR,profile:{role:r2.data.role,name:r2.data.name,flat_id:flatId,id:r2.data.id}});
   }
 
   async function doRegister() {
@@ -465,30 +642,51 @@ export default function App() {
   }
 
   useEffect(function() {
-    var saved = localStorage.getItem("pallazo_temp_session");
-    if (saved) {
+    var cancelled = false;
+    (async function() {
+      var saved = localStorage.getItem("pallazo_temp_session");
+      if (saved) {
+        try {
+          var parsed = JSON.parse(saved);
+          if (parsed.authBacked) {
+            // This login was backed by a real Auth session — if that has expired, ask for a fresh login
+            var cur = await supabase.auth.getSession();
+            if (!cur.data || !cur.data.session) {
+              localStorage.removeItem("pallazo_temp_session");
+              if (!cancelled) setAppLoading(false);
+              return;
+            }
+          }
+          if (cancelled) return;
+          setSession(parsed);
+          setUserProfile(parsed.profile);
+          setAppLoading(false);
+          loadData(); // ← call directly, don't rely on the [session] effect
+          return;
+        } catch(e) { localStorage.removeItem("pallazo_temp_session"); }
+      }
+      // No app login: drop any orphaned Auth session so the two never disagree
       try {
-        var parsed = JSON.parse(saved);
-        setSession(parsed);
-        setUserProfile(parsed.profile);
-        setAppLoading(false);
-        loadData(); // ← call directly, don't rely on the [session] effect
-        return;
-      } catch(e) { localStorage.removeItem("pallazo_temp_session"); }
-    }
-    supabase.auth.getSession().then(function(result) {
-      var sess = result.data.session;
-      setSession(sess);
-      if (sess) loadUserProfile(sess.user.id);
-      else setAppLoading(false);
-    });
-    var sub = supabase.auth.onAuthStateChange(function(_e, sess) {
-      setSession(sess);
-      if (sess) loadUserProfile(sess.user.id);
-      else { setAppLoading(false); setUserProfile(null); }
+        var orphan = await supabase.auth.getSession();
+        if (orphan.data && orphan.data.session) await endAuthSession();
+      } catch(e) {}
+      if (!cancelled) setAppLoading(false);
+    })();
+    return function() { cancelled = true; };
+  }, [loadData]);
+
+  // If a real Auth session ends on its own (expired / revoked), return to the login screen
+  useEffect(function() {
+    var sub = supabase.auth.onAuthStateChange(function(event) {
+      if (event !== "SIGNED_OUT") return;
+      var saved = localStorage.getItem("pallazo_temp_session");
+      if (!saved) return;
+      try { if (!JSON.parse(saved).authBacked) return; } catch(e) { return; }
+      localStorage.removeItem("pallazo_temp_session");
+      setSession(null); setUserProfile(null);
     });
     return function() { sub.data.subscription.unsubscribe(); };
-  }, [loadData]);
+  }, []);
 
   useEffect(function() {
     // Only trigger for real Supabase sessions (not temp PIN sessions)
@@ -516,7 +714,7 @@ export default function App() {
 
   async function handleLogout() {
     localStorage.removeItem("pallazo_temp_session");
-    if (session && !session.temp) await supabase.auth.signOut();
+    await endAuthSession();
     setSession(null); setUserProfile(null);
     showToast("Logged out");
   }
@@ -634,6 +832,7 @@ export default function App() {
       sharedProps={null}
       onLogout={function(){
         localStorage.removeItem("pallazo_temp_session");
+        endAuthSession();
         setSession(null); setUserProfile(null);
       }}/>;
   }
@@ -1194,6 +1393,7 @@ function AdminChangePasswordModal(props) {
       var upd = await supabase.from("super_admin_credentials").upsert({id:1, username:"admin", password_hash:form.next});
       setSaving(false);
       if (upd.error) { setErr(upd.error.message); return; }
+      await syncOwnAuthPassword(form.next);
       props.showToast("✅ Admin password changed! Use the new password next time you login.");
       props.onClose();
       return;
@@ -1207,6 +1407,7 @@ function AdminChangePasswordModal(props) {
     var upd2 = await supabase.from("resident_users").update({password_hash:form.next}).eq("id",props.profile.id);
     setSaving(false);
     if (upd2.error) { setErr(upd2.error.message); return; }
+    await syncOwnAuthPassword(form.next);
     props.showToast("✅ Password changed successfully!");
     props.onClose();
   }
@@ -2588,6 +2789,7 @@ function ResidentPortal(props) {
     var chk = await supabase.from("resident_users").select("password_hash").eq("id",props.profile.id).single();
     if(chk.error||chk.data.password_hash!==passForm.current){ setPassErr("Current password incorrect"); setPassSaving(false); return; }
     await supabase.from("resident_users").update({password_hash:passForm.next}).eq("id",props.profile.id);
+    await syncOwnAuthPassword(passForm.next);
     setPassSaving(false);
     showToast("✅ Password changed!");
     setShowChangePass(false);
@@ -3139,6 +3341,7 @@ function ApprovalsTab(props) {
   var [showAddUser, setShowAddUser] = useState(false);
   var [editUser, setEditUser] = useState(null);
   var [savingUser, setSavingUser] = useState(false);
+  var [showAuthSheet, setShowAuthSheet] = useState(false);
   var emptyUserForm = {name:"",flat_id:"",role:"owner",phone:"",password:"",status:"active"};
   var [userForm, setUserForm] = useState(emptyUserForm);
   // Keep sec in ref so remounts don't reset it
@@ -3165,6 +3368,7 @@ function ApprovalsTab(props) {
       if (userForm.password) updateData.password_hash = userForm.password;
       var r = await supabase.from("resident_users").update(updateData).eq("id", editUser.id);
       if (r.error) { props.showToast("❌ "+r.error.message); setSavingUser(false); return; }
+      await syncAccountFor(editUser.id);
       props.showToast("✅ User updated!");
     } else {
       var chk = await supabase.from("resident_users").select("id").eq("phone",userForm.phone).single();
@@ -3172,8 +3376,9 @@ function ApprovalsTab(props) {
       var r2 = await supabase.from("resident_users").insert({
         name:userForm.name, flat_id:userForm.flat_id, role:userForm.role,
         phone:userForm.phone, password_hash:userForm.password, status:"active"
-      });
+      }).select("id").single();
       if (r2.error) { props.showToast("❌ "+r2.error.message); setSavingUser(false); return; }
+      await syncAccountFor(r2.data.id);
       props.showToast("✅ "+userForm.name+" added! Share their login: "+userForm.phone);
     }
     setSavingUser(false);
@@ -3234,6 +3439,7 @@ function ApprovalsTab(props) {
     }).select("id").single();
     if(res.error){ props.showToast("❌ "+res.error.message); return; }
     var newUserId = res.data.id;
+    await syncAccountFor(newUserId);
     // Update request status
     var upd = await supabase.from("registration_requests")
       .update({status:"approved", approved_by:props.userProfile?.id||null, approved_at:new Date().toISOString()})
@@ -3598,6 +3804,7 @@ function ApprovalsTab(props) {
           <div className="row-between" style={{marginBottom:10}}>
             <div style={{fontSize:12,color:"var(--muted)"}}>{residents.length} registered residents</div>
             <div style={{display:"flex",gap:8}}>
+              {!props.ownerFlatId && <button onClick={function(){setShowAuthSheet(true);}} style={{fontSize:11,padding:"4px 10px",border:"1.5px solid var(--gold)",borderRadius:6,background:"transparent",color:"var(--gold)",cursor:"pointer",fontWeight:600}}>🔐 Login accounts</button>}
               <button onClick={function(){
                 // Export residents to Excel
                 var XLSX = window.XLSX;
@@ -3730,6 +3937,7 @@ function ApprovalsTab(props) {
       )}
 
       {/* WhatsApp welcome message */}
+      {showAuthSheet && <AuthAccountsSheet onClose={function(){setShowAuthSheet(false);}}/>}
       {whatsappMsg && (
         <div className="overlay" onClick={function(){setWhatsappMsg(null);}}>
           <div className="sheet" onClick={function(e){e.stopPropagation();}}>
