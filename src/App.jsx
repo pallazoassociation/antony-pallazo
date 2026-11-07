@@ -49,6 +49,8 @@ function buildMonthList() {
   return months;
 }
 var ALL_MONTHS = buildMonthList();
+// Rent/maintenance is due by this day of the month; unpaid after it counts as overdue
+var DUE_DAY = 10;
 
 var ALL_FLAT_IDS = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
@@ -518,7 +520,7 @@ export default function App() {
     var today = new Date();
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
     // Only set arrears if this is a past/current month after 15th
-    var isOverdue = (month < curMonth) || (month === curMonth && today.getDate() > 15);
+    var isOverdue = (month < curMonth) || (month === curMonth && today.getDate() > DUE_DAY);
     var rows = Object.entries(FLAT_BHK).map(function(e){
       var charge = CHARGES[e[1]];
       return {flat_id:e[0], billing_month:month, total_amount:charge,
@@ -535,7 +537,7 @@ export default function App() {
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
     var isFuture = month > curMonth;
     var isCurrent = month === curMonth;
-    var isAfter15 = today.getDate() > 15;
+    var isAfterDue = today.getDate() > DUE_DAY;
 
     var result = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
 
@@ -547,7 +549,7 @@ export default function App() {
       if (s.data) setMonthlySummaries(s.data);
     } else if (!isFuture) {
       // Bills exist — for current month after 15th, ensure arrears are set
-      if (isCurrent && isAfter15) {
+      if (isCurrent && isAfterDue) {
         var needsUpdate = result.data.filter(function(b){
           return b.status==="overdue" && (!b.arrears || b.arrears===0);
         });
@@ -580,6 +582,14 @@ export default function App() {
   var loadData = useCallback(async function() {
     setDataLoading(true);
     try {
+      // Self-repair: unpaid bills of past months must carry an amount owed, or they vanish from the
+      // Overdue tab. Best-effort — does nothing (and never blocks loading) if the function isn't installed.
+      try {
+        await Promise.race([
+          Promise.resolve(supabase.rpc("refresh_overdue_arrears")),
+          new Promise(function(resolve) { setTimeout(resolve, 4000); })
+        ]);
+      } catch (eRepair) { /* function not installed yet */ }
       var results = await Promise.all([
         supabase.from("flats").select("*").order("block").order("flat_no"),                              // 0
         supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false}),           // 1
@@ -869,7 +879,6 @@ export default function App() {
     var today = new Date();
     var curMonth = today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0");
     var b = getBillForFlat(flatId);
-    var DUE_DAY = 10; // Due by 10th of every month
 
     // ── FUTURE MONTHS ──────────────────────────────
     if (selMonth > curMonth) {
@@ -1485,7 +1494,7 @@ function HomeTab(props) {
               var total = props.monthBills.length||1;
               var advCnt = (props.monthBills||[]).filter(function(b){return b.status==="paid"&&b.billing_month>props.selMonth;}).length;
               var dueCnt = (props.monthBills||[]).filter(function(b){
-                var today=new Date(); return b.status==="overdue"&&b.billing_month===props.selMonth&&today.getDate()<=10;
+                var today=new Date(); return b.status==="overdue"&&b.billing_month===props.selMonth&&today.getDate()<=DUE_DAY;
               }).length;
               return (<>
                 <div className="multi-bar">
