@@ -51,6 +51,17 @@ function buildMonthList() {
 var ALL_MONTHS = buildMonthList();
 // Rent/maintenance is due by this day of the month; unpaid after it counts as overdue
 var DUE_DAY = 10;
+// Every flat in the complex and its type — used to create each month's bills
+var FLAT_BHK = {
+  "A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK",
+  "B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK",
+  "C1":"2BHK","C2":"2BHK","C3":"2BHK","C4":"1BHK","C5":"2BHK","C6":"2BHK",
+  "D1D2":"3BHK","D3":"2BHK","D4":"1BHK","D5":"1BHK",
+  "E1":"2BHK","E2":"3BHK","E3":"1BHK","E4":"2BHK",
+  "F1":"2BHK","F2":"2BHK","F3":"2BHK","F4":"2BHK"
+};
+var CHARGES = {"3BHK":2000,"2BHK":1800,"1BHK":1600};
+var TOTAL_FLATS = Object.keys(FLAT_BHK).length;
 
 var ALL_FLAT_IDS = ["A1","A2","A3","A4","A5","A6","B1","B2","B3","B4","B5","B6","C1","C2","C3","C4","C5","C6","D1D2","D3","D4","D5","E1","E2","E3","E4","F1","F2","F3","F4"];
 
@@ -504,15 +515,6 @@ export default function App() {
 
   // Auto-generate bills for a new month when it doesn't exist yet
   var autoGenBills = useCallback(async function(month) {
-    var FLAT_BHK = {
-      "A1":"3BHK","A2":"3BHK","A3":"3BHK","A4":"3BHK","A5":"3BHK","A6":"3BHK",
-      "B1":"2BHK","B2":"2BHK","B3":"2BHK","B4":"1BHK","B5":"2BHK","B6":"2BHK",
-      "C1":"2BHK","C2":"2BHK","C3":"2BHK","C4":"1BHK","C5":"2BHK","C6":"2BHK",
-      "D1D2":"3BHK","D3":"2BHK","D4":"1BHK","D5":"1BHK",
-      "E1":"2BHK","E2":"3BHK","E3":"1BHK","E4":"2BHK",
-      "F1":"2BHK","F2":"2BHK","F3":"2BHK","F4":"2BHK"
-    };
-    var CHARGES = {"3BHK":2000,"2BHK":1800,"1BHK":1600};
     var y = parseInt(month.slice(0,4)), m = parseInt(month.slice(5,7));
     var dueM = m===12?"01":String(m+1).padStart(2,"0");
     var dueY = m===12?y+1:y;
@@ -541,12 +543,16 @@ export default function App() {
 
     var result = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
 
-    if (!result.data || result.data.length === 0) {
-      // No bills — auto-generate (correct arrears based on month)
+    if (!result.data || result.data.length < TOTAL_FLATS) {
+      // Some or all flats have no bill for this month (e.g. an early advance payment created just one):
+      // generate the missing ones. Existing bills are never overwritten (ignoreDuplicates).
       await autoGenBills(month);
       result = await supabase.from("flat_month_status").select("*").eq("billing_month", month);
       var s = await supabase.from("monthly_summary").select("*").order("billing_month",{ascending:false});
       if (s.data) setMonthlySummaries(s.data);
+      // Newly created bills can change who is overdue — refresh the Overdue list too
+      var ovNew = await supabase.from("overdue_summary").select("*").order("flat_id").order("billing_month");
+      if (ovNew.data) setOverdueBills(ovNew.data);
     } else if (!isFuture) {
       // Bills exist — for current month after 15th, ensure arrears are set
       if (isCurrent && isAfterDue) {
